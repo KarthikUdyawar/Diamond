@@ -156,3 +156,6 @@ cython_debug/
 
 # backup
 backup/
+
+# Dataset
+notebook/natural-diamonds-prices-images/
