@@ -1,6 +1,7 @@
 version: '3'
 services:
   jupyter:
+    image: jupyter:0.1.0  
     build:
       context: ..
       dockerfile: containers/notebook.Dockerfile
