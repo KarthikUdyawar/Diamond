@@ -158,4 +158,4 @@ cython_debug/
 backup/
 
 # Dataset
-natural-diamonds-prices-images
+natural-diamonds-prices-images/
