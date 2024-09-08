@@ -5,7 +5,7 @@ FROM python:3.10-slim AS build
 WORKDIR /app
 
 # Copy the requirements.txt file from the notebooks directory (one level up)
-COPY ../notebook/requirements.txt /app/requirements.txt
+COPY ../notebooks/requirements.txt /app/requirements.txt
 
 # Install dependencies in the build stage
 RUN pip install --no-cache-dir -r requirements.txt
@@ -24,10 +24,10 @@ COPY --from=build /usr/local/bin /usr/local/bin
 RUN pip install jupyter --no-cache-dir
 
 # Copy the notebook directory (from one level up) into the runtime container
-COPY ../notebook /app/notebook
+COPY ../notebooks /app/notebooks
 
 # Expose Jupyter Notebook port
 EXPOSE 8888
 
 # Set default command to run Jupyter Notebook
-CMD ["jupyter", "notebook", "--ip=0.0.0.0", "--no-browser", "--allow-root", "--notebook-dir=/app/notebook"]
+CMD ["jupyter", "notebook", "--ip=0.0.0.0", "--no-browser", "--allow-root", "--notebook-dir=/app/notebooks"]
