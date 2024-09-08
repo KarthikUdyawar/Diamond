@@ -1,0 +1,15 @@
+version: '3'
+services:
+  jupyter:
+    image: jupyter:0.1.0  
+    build:
+      context: ..
+      dockerfile: containers/notebook.Dockerfile
+    container_name: jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      - ../notebook:/app/notebook
+    environment:
+      - JUPYTER_TOKEN=mysecuretoken  # Optional: Set a token for secure access
+    command: jupyter notebook --ip=0.0.0.0 --no-browser --allow-root --notebook-dir=/app/notebook
