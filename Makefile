@@ -1,6 +1,6 @@
 # Variables
 VENV_DIR = ~/Projects/Diamond/venv
-DOCKER_COMPOSE_FILE = containers/notebook-docker-compose.yml
+DOCKER_COMPOSE_FILE = containers/notebooks-docker-compose.yml
 PROJECT_NAME = diamond
 
 # Create virtual environment
@@ -13,6 +13,11 @@ venv:
 activate:
 	@echo "Run the following to activate the virtual environment:"
 	@echo "source $(VENV_DIR)/bin/activate"
+
+# Run pre-commit hooks for all files
+.PHONY: pre-commit
+pre-commit:
+	pre-commit run --all-files
 
 # Run Jupyter notebook
 .PHONY: notebook

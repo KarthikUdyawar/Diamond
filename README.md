@@ -1,2 +1,2 @@
 # Diamond
- Diamond price predictions + data analysis 
+ Diamond price predictions + data analysis
