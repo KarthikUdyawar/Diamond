@@ -1,0 +1,337 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit Configuration — General Python Project Template
+# Docs: https://docs.coderabbit.ai/configure-coderabbit/
+#
+# Philosophy:
+#   pre-commit handles → formatting, linting, types, secrets, whitespace
+#   CodeRabbit handles → semantic, logic, architecture, context
+#   No overlap. No duplicate noise.
+
+language: en-US
+early_access: false
+
+# ── Review Settings ──────────────────────────────────────────────────────────
+reviews:
+  profile: chill                        # Suggestions only, never blocking
+  request_changes_workflow: false       # Never block merges
+
+  high_level_summary: true
+  high_level_summary_placeholder: "@coderabbitai summary"
+  poem: false
+  collapse_walkthrough: true
+  review_status: true
+  sequence_diagrams: true
+  abort_on_close: true
+
+  # ── Labels ───────────────────────────────────────────────────────────────
+  # Create these in GitHub → Settings → Labels before first use.
+  suggested_labels: true
+  auto_apply_labels: true
+
+  labeling_instructions:
+
+    # Area
+    - label: "area:backend"
+      instructions: >
+        Apply when the PR changes files under src/, app/, api/, or backend/ —
+        including routes, services, schemas, models, or core logic.
+
+    - label: "area:frontend"
+      instructions: >
+        Apply when the PR changes files under ui/, frontend/, or dashboard/ —
+        including pages, components, or API client modules.
+
+    - label: "area:ml"
+      instructions: >
+        Apply when the PR changes files related to ML — feature engineering,
+        training scripts, model evaluation, SHAP, or experiment tracking.
+
+    - label: "area:data"
+      instructions: >
+        Apply when the PR changes data schemas, raw data handling, validation
+        logic, or data processing pipelines.
+
+    - label: "area:infra"
+      instructions: >
+        Apply when the PR changes infrastructure or DevOps files —
+        docker-compose.yml, Dockerfile, Makefile, CI workflows, or pyproject.toml.
+
+    - label: "area:docs"
+      instructions: >
+        Apply when the PR changes any file under docs/ or any .md file at the
+        project root (README, TODO, CHANGELOG, etc.).
+
+    - label: "area:tests"
+      instructions: >
+        Apply when the PR changes any test files — unit, integration, e2e,
+        fixtures, or conftest.py.
+
+    - label: "area:config"
+      instructions: >
+        Apply when the PR changes configuration files — .env.example,
+        pyproject.toml, .pre-commit-config.yaml, .coderabbit.yaml, or similar.
+
+    # Type
+    - label: "type:feature"
+      instructions: >
+        Apply when the PR introduces new functionality that did not exist before.
+
+    - label: "type:bug"
+      instructions: >
+        Apply when the PR fixes an existing defect, incorrect behaviour,
+        or broken functionality.
+
+    - label: "type:refactor"
+      instructions: >
+        Apply when the PR restructures code without changing external behaviour —
+        extracting functions, renaming, reorganising modules.
+
+    - label: "type:chore"
+      instructions: >
+        Apply when the PR contains maintenance work with no user-facing impact —
+        dependency updates, lock file changes, comment cleanup, CI tweaks.
+
+    - label: "type:hotfix"
+      instructions: >
+        Apply when the PR is an urgent fix targeting main or production directly.
+
+    # Risk
+    - label: "risk:breaking-change"
+      instructions: >
+        Apply when the PR changes a public API contract, removes or renames
+        endpoints, changes Pydantic schema fields, or modifies database schema
+        in a backwards-incompatible way.
+
+    - label: "risk:needs-review"
+      instructions: >
+        Apply when the PR touches sensitive areas — authentication, security
+        config, ML model logic, data validation, or database migrations.
+
+    - label: "risk:safe"
+      instructions: >
+        Apply when the PR is low-risk — isolated to docs, tests, minor copy
+        edits, or clearly non-breaking additions.
+
+    # Size
+    - label: "size:small"
+      instructions: >
+        Apply when the PR changes fewer than 50 lines (excluding lock files,
+        generated files, and docs/assets).
+
+    - label: "size:medium"
+      instructions: >
+        Apply when the PR changes 50–250 lines (excluding lock files,
+        generated files, and docs/assets).
+
+    - label: "size:large"
+      instructions: >
+        Apply when the PR changes more than 250 lines (excluding lock files,
+        generated files, and docs/assets).
+
+    # Status
+    - label: "status:wip"
+      instructions: >
+        Apply when the PR title contains WIP, the PR is a draft, or the
+        description states the work is not yet complete.
+
+    - label: "status:ready"
+      instructions: >
+        Apply when the PR is not a draft, all checklist items are ticked,
+        and the description states it is ready for review.
+
+    - label: "status:blocked"
+      instructions: >
+        Apply when the PR is blocked on another PR, an external dependency,
+        a decision, or an unresolved issue.
+
+    # Effort
+    - label: "effort:low"
+      instructions: >
+        Apply when the PR is easy to review — small diff, single concern,
+        well-tested, clear description. Under 10 minutes expected.
+
+    - label: "effort:medium"
+      instructions: >
+        Apply when the PR needs moderate review — multiple files, some logic
+        complexity. 10–30 minutes expected.
+
+    - label: "effort:high"
+      instructions: >
+        Apply when the PR needs significant review — large diff, complex
+        business logic, cross-cutting concerns. Over 30 minutes expected.
+
+    # Priority
+    - label: "priority:low"
+      instructions: >
+        Apply when the PR is a nice-to-have with no urgency.
+
+    - label: "priority:medium"
+      instructions: >
+        Apply when the PR is planned work to be merged this sprint.
+
+    - label: "priority:high"
+      instructions: >
+        Apply when the PR fixes an important bug or unblocks other work.
+
+    - label: "priority:critical"
+      instructions: >
+        Apply when the PR is an urgent hotfix, security fix, or
+        production-breaking issue that must be merged immediately.
+
+  # ── Auto-review behaviour ─────────────────────────────────────────────────
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    base_branches:
+      - main
+      - develop
+      - "release/*"
+
+  # ── Path-based review instructions ───────────────────────────────────────
+  # CodeRabbit focuses on SEMANTIC issues only.
+  # pre-commit already handles: formatting, types, secrets, linting.
+  path_instructions:
+
+    # Source / application code
+    - path: "src/**"
+      instructions: |
+        Semantic and logic review only. pre-commit handles formatting and types.
+        Focus on:
+        - Incorrect or missing error handling
+        - Silent failures (bare except, swallowed exceptions)
+        - Business logic correctness and edge cases
+        - Functions doing more than one thing (violates SRP)
+        - Hard-coded values that belong in constants or config
+        - Missing or incorrect type narrowing in conditional branches
+
+    # API routes
+    - path: "{api,backend,app}/routes/**"
+      instructions: |
+        Focus on:
+        - Incorrect HTTP status codes (201 on creation, 422 vs 400, etc.)
+        - Route handlers containing business logic (should delegate to services)
+        - Missing or incorrect dependency injection
+        - Returning internal models directly instead of response schemas
+        - Missing error responses for documented failure cases
+
+    # Services / business logic
+    - path: "{api,backend,app}/services/**"
+      instructions: |
+        Focus on:
+        - Business logic correctness and edge cases
+        - External API calls without timeout or retry handling
+        - Missing null/None checks on inputs from external sources
+        - Side effects in functions that should be pure
+        - Expensive operations that should be cached
+
+    # Pydantic schemas
+    - path: "{api,backend,app}/schemas**"
+      instructions: |
+        Focus on:
+        - Fields that are too permissive (missing ge, le, min_length, pattern)
+        - Response schemas exposing fields that should not be public
+        - Optional fields that should be required (or vice versa)
+        - Schema drift from actual database models or API contracts
+
+    # ML — feature engineering
+    - path: "src/features**"
+      instructions: |
+        Focus on:
+        - Data leakage: any fit() call on test or full data instead of train only
+        - Transformers that are not stateless (fitting inside transform())
+        - Missing handling for unseen categories at inference time
+        - Engineered features that could produce inf or NaN silently
+        - Inconsistent column ordering between training and inference
+
+    # ML — training
+    - path: "src/train**"
+      instructions: |
+        Focus on:
+        - random_state not set (reproducibility)
+        - Metrics evaluated on training set instead of held-out test set
+        - MLflow runs not closed properly (missing end_run or context manager)
+        - Model registered before metrics are verified
+        - Hyperparameter search spaces that could cause numerical instability
+
+    # ML — explainability
+    - path: "src/explain**"
+      instructions: |
+        Focus on:
+        - TreeExplainer or any explainer being re-instantiated per request
+        - Background dataset larger than needed (memory/latency concern)
+        - SHAP values returned without unit conversion (log-scale vs dollar-scale)
+        - Missing error handling when model or explainer is not loaded
+
+    # Tests
+    - path: "{tests,**/tests}/**"
+      instructions: |
+        Light review only. Flag only:
+        - New code added in this PR with zero test coverage
+        - Assertions that are trivially always true
+        - Hardcoded secrets, real credentials, or production URLs in fixtures
+        - Tests that mock so heavily they no longer test real behaviour
+
+    # Dockerfiles
+    - path: "**/Dockerfile"
+      instructions: |
+        Focus on:
+        - Base image not pinned to a specific digest or version tag
+        - Secrets or credentials passed via ENV instead of build secrets
+        - Large files or dev dependencies copied into production images
+        - Missing HEALTHCHECK instruction
+        - Running as root when a non-root user is feasible
+
+    # Docker Compose
+    - path: "docker-compose{,.override}.yml"
+      instructions: |
+        Focus on:
+        - Services missing health checks
+        - Hardcoded credentials (should use env vars from .env)
+        - Bind mounts pointing to paths that don't exist in the repo
+        - Services that depend on others without condition: service_healthy
+
+    # CI workflows
+    - path: ".github/workflows/**"
+      instructions: |
+        Focus on:
+        - Secrets exposed in run: steps via echo or env
+        - Steps that run on untrusted input without sanitisation
+        - Missing permissions: restrictions on workflow jobs
+        - Pinning actions to a SHA vs a mutable tag
+
+    # Docs
+    - path: "docs/**"
+      instructions: |
+        Focus on:
+        - Endpoints or features documented that no longer exist in code
+        - Missing documentation for new endpoints or features in this PR
+        - Broken or stale markdown links
+        - TODOs without an owner or resolution path
+
+    # README
+    - path: "README.md"
+      instructions: |
+        Focus on:
+        - Quickstart commands that no longer work
+        - Prerequisites that are missing or outdated
+        - Architecture diagram that doesn't match current service structure
+
+  # ── Ignored paths — never comment on these ───────────────────────────────
+  path_filters:
+    - "!**/__pycache__/**"
+    - "!**/uv.lock"
+    - "!**/poetry.lock"
+    - "!**/*.lock"
+    - "!**/node_modules/**"
+    - "!logs/**"
+    - "!docs/assets/**"
+    - "!data/raw/**"
+    - "!data/processed/**"
+    - "!mlruns/**"
+    - "!notebooks/**"
+
+# ── Chat ─────────────────────────────────────────────────────────────────────
+chat:
+  auto_reply: true
