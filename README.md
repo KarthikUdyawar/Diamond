@@ -32,13 +32,13 @@ Diamond trains a **CatBoost regression model** on ~6,300 natural diamond records
 
 ML Pipeline (runs inside api container via make train):
 
-  data/raw/           src/features.py       src/train.py
-  diamonds.csv   ──▶  ColumnTransformer ──▶  CatBoost + 3
-  (Kaggle API)        KNN impute             baseline models
-                      Ordinal encode    ──▶  Optuna 50 trials
-                      OHE Shape         ──▶  MLflow logging
-                      Engineer features ──▶  Model Registry
-                                             Diamond/Production
+  data/raw/              src/features.py       src/train.py
+  Diamonds/              _merge_raw_csvs() ──▶  CatBoost + 3
+  Diamonds2/             ColumnTransformer      baseline models
+  (15 per-shape CSVs)    KNN impute        ──▶  Optuna 50 trials
+                         Ordinal encode    ──▶  MLflow logging
+                         OHE Shape         ──▶  Model Registry
+                         Engineer features      Diamond/Production
 ```
 
 ---
@@ -118,11 +118,12 @@ make clean-cache   Remove Python/tool caches
 ```
 Diamond/
 ├── src/                    # ML pipeline
-│   ├── constants.py        # Column names, category orders, magic numbers
-│   ├── features.py         # Feature engineering pipeline (Day 2)
+│   ├── constants.py        # Column names, category orders, abbreviation maps, paths
+│   ├── features.py         # Feature engineering pipeline (Day 2) ✅
 │   ├── train.py            # Model training + MLflow logging (Day 3)
 │   ├── explain.py          # SHAP explainability (Day 4)
 │   └── tests/
+│       └── test_features.py
 ├── api/                    # FastAPI REST API
 │   ├── main.py             # App factory + lifespan
 │   ├── schemas.py          # Pydantic v2 models
@@ -137,8 +138,8 @@ Diamond/
 │   ├── templates.py        # Plain-English sentence templates
 │   └── Dockerfile
 ├── data/
-│   ├── raw/                # diamonds.csv (from make download)
-│   └── processed/          # train.parquet, test.parquet (gitignored)
+│   ├── raw/                # Kaggle download — Diamonds/ + Diamonds2/ subdirs
+│   └── processed/          # train.parquet, test.parquet, pipeline.joblib (gitignored)
 ├── notebooks/              # EDA only — do not modify
 ├── docs/                   # PRD, Design Doc, Tech Rules, TODO, Day logs
 ├── docker-compose.yml
@@ -153,20 +154,22 @@ Diamond/
 
 **Source:** [Natural Diamonds Prices + Images](https://www.kaggle.com/datasets/harshitlakhani/natural-diamonds-prices-images) — Kaggle
 
+The raw download contains two subdirectories (`Diamonds/` and `Diamonds2/`) with 15 per-shape CSV files. `make features` merges them automatically — no manual preprocessing required.
+
 **Schema:**
 
-| Column       | Type        | Description                          |
-| ------------ | ----------- | ------------------------------------ |
-| Shape        | categorical | Round, Princess, Oval, … (8 shapes)  |
-| Weight       | float       | Carats                               |
-| Clarity      | ordinal     | I1 → IF (8 grades)                   |
-| Colour       | ordinal     | J → D (7 grades)                     |
-| Cut          | ordinal     | Fair → Ideal (5 grades)              |
-| Polish       | ordinal     | Fair → Ideal (5 grades)              |
-| Symmetry     | ordinal     | Fair → Ideal (5 grades)              |
-| Fluorescence | ordinal     | Very Strong → None (5 grades)        |
-| Messurements | string      | `"L x W x D"` — parsed into 3 floats |
-| Price        | string      | Target — `"$3,842"` format           |
+| Column       | Type        | Description                                                    |
+| ------------ | ----------- | -------------------------------------------------------------- |
+| Shape        | categorical | Cushion, Emerald, Heart, Marquise, Oval, Pear, Princess, Round |
+| Weight       | float       | Carats                                                         |
+| Clarity      | ordinal     | I3 → FL (11 grades)                                            |
+| Colour       | ordinal     | FANCY → D (20 grades including range grades)                   |
+| Cut          | ordinal     | Fair → Excellent (4 grades — EX/VG/GD/FR in CSV)               |
+| Polish       | ordinal     | Fair → Excellent (4 grades)                                    |
+| Symmetry     | ordinal     | Fair → Excellent (4 grades)                                    |
+| Fluorescence | ordinal     | Very Strong → None (7 grades — abbreviated in CSV)             |
+| Messurements | string      | `"L-W×D"` — parsed into length, width, depth_mm                |
+| Price        | float       | Target — plain float in CSV                                    |
 
 ---
 
@@ -180,7 +183,7 @@ curl -X POST http://localhost:8000/predict \
   -d '{
     "weight": 0.89,
     "shape": "Round",
-    "cut": "Premium",
+    "cut": "Excellent",
     "colour": "H",
     "clarity": "SI2",
     "polish": "Excellent",
@@ -251,8 +254,8 @@ Commit convention: `feat(day2): add KNN imputer for numerical columns`
 | Day | Area                                         | Status |
 | --- | -------------------------------------------- | ------ |
 | 1   | Repo restructure + Docker Compose + Makefile | ✅ Done |
-| 2   | Feature engineering pipeline                 | ⬜ Next |
-| 3   | Model training + MLflow + Optuna             | ⬜      |
+| 2   | Feature engineering pipeline                 | ✅ Done |
+| 3   | Model training + MLflow + Optuna             | ⬜ Next |
 | 4   | SHAP explainability                          | ⬜      |
 | 5   | FastAPI REST API + tests                     | ⬜      |
 | 6   | Streamlit dashboard                          | ⬜      |
