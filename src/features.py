@@ -384,7 +384,7 @@ def _merge_raw_csvs(raw_dir: str = RAW_DATA_DIR) -> pd.DataFrame:
         if missing:
             logger.error(f"{path} is missing expected columns: {missing}")
             raise ValueError(f"{path} is missing expected columns: {missing}")
-        frames.append(df)
+        frames.append(df[RAW_COLUMNS].copy())
 
     merged = pd.concat(frames, ignore_index=True)
     logger.info(
