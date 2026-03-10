@@ -211,9 +211,12 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
 
     # 4. Remove outliers
     mask = (
-        (df[LENGTH_COL] >= OUTLIER_MIN_LENGTH)
+        (df[PRICE_COL] >= 0)
         & (df[PRICE_COL] <= OUTLIER_MAX_PRICE)
+        & (df["Weight"] > 0)
         & (df["Weight"] <= OUTLIER_MAX_WEIGHT)
+        & (df[LENGTH_COL] >= OUTLIER_MIN_LENGTH)
+        & (df[WIDTH_COL] > 0)
         & (df[DEPTH_MM_COL] >= OUTLIER_MIN_DEPTH_MM)
     )
     df = df[mask].copy()
@@ -377,6 +380,10 @@ def _merge_raw_csvs(raw_dir: str = RAW_DATA_DIR) -> pd.DataFrame:
         df = pd.read_csv(path)
         # Drop the extra 'Data Url' column present in the Diamonds/ subset
         df = df.drop(columns=["Data Url"], errors="ignore")
+        missing = [col for col in RAW_COLUMNS if col not in df.columns]
+        if missing:
+            logger.error(f"{path} is missing expected columns: {missing}")
+            raise ValueError(f"{path} is missing expected columns: {missing}")
         frames.append(df)
 
     merged = pd.concat(frames, ignore_index=True)
@@ -392,7 +399,7 @@ def _merge_raw_csvs(raw_dir: str = RAW_DATA_DIR) -> pd.DataFrame:
 def run_feature_engineering(
     raw_dir: str = RAW_DATA_DIR,
     processed_dir: str = PROCESSED_DIR,
-    pipeline_path: str = PIPELINE_PATH,
+    pipeline_path: str | None = None,
 ) -> None:
     """
     Full feature engineering orchestrator.
@@ -414,6 +421,9 @@ def run_feature_engineering(
         Full path for the saved pipeline joblib file.
     """
     Path(processed_dir).mkdir(parents=True, exist_ok=True)
+    if pipeline_path is None:
+        pipeline_path = os.fspath(Path(processed_dir) / Path(PIPELINE_PATH).name)
+    Path(pipeline_path).parent.mkdir(parents=True, exist_ok=True)
 
     # 1. Merge raw CSVs
     df_raw = _merge_raw_csvs(raw_dir)

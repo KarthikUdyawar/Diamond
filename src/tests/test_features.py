@@ -253,7 +253,10 @@ class TestRunFeatureEngineering:
     def test_pipeline_runs_with_csv_fixtures(self, tmp_path: Path) -> None:
         """Ensure run_feature_engineering works without external dataset."""
         raw_dir = tmp_path / "raw"
-        raw_dir.mkdir()
+        standard_dir = raw_dir / "Diamonds2"
+        standard_dir.mkdir(parents=True)
+        alt_layout_dir = raw_dir / "Diamonds" / "Diamonds"
+        alt_layout_dir.mkdir(parents=True)
 
         df = pd.DataFrame(
             [
@@ -266,8 +269,10 @@ class TestRunFeatureEngineering:
             ]
         )
 
-        df.to_csv(raw_dir / "data_1.csv", index=False)
-        df.to_csv(raw_dir / "data_2.csv", index=False)
+        df.to_csv(standard_dir / "data_1.csv", index=False)
+        df.assign(**{"Data Url": "fixture"}).to_csv(
+            alt_layout_dir / "data_2.csv", index=False
+        )
 
         processed_dir = tmp_path / "processed"
         pipeline_path = processed_dir / "pipeline.joblib"
