@@ -9,6 +9,8 @@ KAGGLE_DATASET := harshitlakhani/natural-diamonds-prices-images
 RAW_DATA_DIR   := data/raw
 COMPOSE        := docker compose
 
+-include .env
+export
 # =============================================================================
 # Help
 # =============================================================================

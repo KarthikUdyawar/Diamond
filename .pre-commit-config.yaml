@@ -33,10 +33,12 @@ repos:
     hooks:
       - id: ruff
         name: Ruff (lint + autofix)
+        exclude: ^notebooks/
         args: [--fix, --exit-non-zero-on-fix, --verbose]
 
       - id: ruff-format
         name: Ruff (format)
+        exclude: ^notebooks/
         args: [--verbose]
 
   # ────────────────────────────────────────────────
