@@ -157,6 +157,7 @@ SHAPE_CATEGORIES: list[str] = [
     "Oval",
     "Pear",
     "Princess",
+    "Radiant",
     "Round",
 ]
 
@@ -173,6 +174,12 @@ OUTLIER_MIN_DEPTH_MM: float = 1.0
 # ---------------------------------------------------------------------------
 TEST_SIZE: float = 0.2
 RANDOM_STATE: int = 42
+
+# ---------------------------------------------------------------------------
+# Dataset size requirements
+# ---------------------------------------------------------------------------
+# Minimum number of samples required to safely perform a train/test split
+MIN_SPLIT_SAMPLES: int = 5
 
 # ---------------------------------------------------------------------------
 # MLflow

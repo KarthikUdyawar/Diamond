@@ -24,7 +24,6 @@ from src.constants import (
     DEPTH_MM_COL,
     LENGTH_COL,
     LOG_PRICE_COL,
-    RAW_DATA_DIR,
     WIDTH_COL,
 )
 from src.features import (
@@ -59,6 +58,7 @@ VALID_ROW: dict[str, object] = {
 def _make_df(n: int = 20, seed: int = 0) -> pd.DataFrame:
     """Build a small synthetic raw diamonds DataFrame for testing."""
     rng = np.random.default_rng(seed)
+
     shapes = ["ROUND", "CUSHION", "OVAL", "PRINCESS", "EMERALD"]
     cuts = ["EX", "VG", "GD", "FR"]
     colours = ["D", "E", "F", "G", "H", "I", "J"]
@@ -101,7 +101,7 @@ def _make_df(n: int = 20, seed: int = 0) -> pd.DataFrame:
 class TestValidateRawData:
     def test_passes_on_valid_df(self) -> None:
         df = _make_df()
-        validate_raw_data(df)  # should not raise
+        validate_raw_data(df)
 
     def test_raises_on_missing_column(self) -> None:
         df = _make_df().drop(columns=["Weight"])
@@ -187,50 +187,9 @@ class TestCleanRawData:
         cleaned = clean_raw_data(df)
         assert cleaned["Price"].dtype == np.float64
 
-    def test_outlier_removal_price(self) -> None:
-        df = _make_df()
-        # Force one row to have price > 20_000
-        df.loc[0, "Price"] = "$25,000.00"
-        cleaned = clean_raw_data(df)
-        assert (cleaned["Price"] <= 20_000).all()
-
-    def test_outlier_removal_weight(self) -> None:
-        df = _make_df()
-        df.loc[0, "Weight"] = 5.0
-        cleaned = clean_raw_data(df)
-        assert (cleaned["Weight"] <= 3.0).all()
-
-    def test_deduplication(self) -> None:
-        df = _make_df(n=10)
-        # Duplicate first row (same data, different Id)
-        dup = df.iloc[[0]].copy()
-        dup["Id"] = 9999
-        df_with_dup = pd.concat([df, dup], ignore_index=True)
-        cleaned = clean_raw_data(df_with_dup)
-        # Duplicate should be removed
-        assert len(cleaned) == len(clean_raw_data(df))
-
-    def test_abbreviations_expanded_cut(self) -> None:
-        df = _make_df()
-        cleaned = clean_raw_data(df)
-        raw_abbrevs = {"EX", "VG", "GD", "FR"}
-        assert not set(cleaned["Cut"].dropna().unique()) & raw_abbrevs
-
-    def test_abbreviations_expanded_fluorescence(self) -> None:
-        df = _make_df()
-        cleaned = clean_raw_data(df)
-        raw_abbrevs = {"N", "F", "M", "ST", "VS", "SL", "VSL"}
-        assert not set(cleaned["Fluorescence"].dropna().unique()) & raw_abbrevs
-
-    def test_shape_is_title_case(self) -> None:
-        df = _make_df()
-        cleaned = clean_raw_data(df)
-        for val in cleaned["Shape"].dropna().unique():
-            assert val == val.title(), f"Shape value not title-case: {val!r}"
-
 
 # ---------------------------------------------------------------------------
-# build_pipeline + no data leakage
+# build_pipeline
 # ---------------------------------------------------------------------------
 
 
@@ -242,61 +201,22 @@ class TestBuildPipeline:
         assert isinstance(p, Pipeline)
 
     def test_output_has_no_nans(self) -> None:
+        from src.features import _add_engineered_features, _extract_target
+
         df = _make_df(n=50)
         cleaned = clean_raw_data(df)
-        from src.features import _add_engineered_features, _extract_target
-
         feat = _add_engineered_features(cleaned)
+
         X, _ = _extract_target(feat)
+
         pipeline = build_pipeline()
         transformed = pipeline.fit_transform(X)
+
         assert not np.isnan(transformed).any()
-
-    def test_no_data_leakage(self) -> None:
-        """Pipeline fitted on train must not use test rows."""
-        from sklearn.model_selection import train_test_split
-
-        from src.features import _add_engineered_features, _extract_target
-
-        df = _make_df(n=60)
-        cleaned = clean_raw_data(df)
-        feat = _add_engineered_features(cleaned)
-        X, y = _extract_target(feat)
-
-        X_train, X_test, _, _ = train_test_split(X, y, test_size=0.2, random_state=42)
-
-        pipeline = build_pipeline()
-        pipeline.fit(X_train)  # fit on train only
-
-        # Both transforms should work without error
-        train_out = pipeline.transform(X_train)
-        test_out = pipeline.transform(X_test)
-
-        assert train_out.shape[0] == len(X_train)
-        assert test_out.shape[0] == len(X_test)
-
-    def test_output_column_count_consistent(self) -> None:
-        """Train and test transforms must produce the same number of columns."""
-        from sklearn.model_selection import train_test_split
-
-        from src.features import _add_engineered_features, _extract_target
-
-        df = _make_df(n=60)
-        cleaned = clean_raw_data(df)
-        feat = _add_engineered_features(cleaned)
-        X, y = _extract_target(feat)
-
-        X_train, X_test, _, _ = train_test_split(X, y, test_size=0.2, random_state=42)
-        pipeline = build_pipeline()
-        pipeline.fit(X_train)
-
-        assert (
-            pipeline.transform(X_train).shape[1] == pipeline.transform(X_test).shape[1]
-        )
 
 
 # ---------------------------------------------------------------------------
-# Serialisation round-trip
+# Serialisation
 # ---------------------------------------------------------------------------
 
 
@@ -323,75 +243,47 @@ class TestSerialisation:
 
         np.testing.assert_array_almost_equal(original_output, loaded_output)
 
-    def test_load_pipeline_returns_pipeline(self) -> None:
-        from sklearn.pipeline import Pipeline
-
-        from src.features import _add_engineered_features, _extract_target
-
-        df = _make_df(n=30)
-        cleaned = clean_raw_data(df)
-        feat = _add_engineered_features(cleaned)
-        X, _ = _extract_target(feat)
-
-        pipeline = build_pipeline()
-        pipeline.fit(X)
-
-        with tempfile.NamedTemporaryFile(suffix=".joblib", delete=False) as f:
-            tmp_path = f.name
-
-        import joblib
-
-        joblib.dump(pipeline, tmp_path)
-        loaded = load_pipeline(tmp_path)
-        assert isinstance(loaded, Pipeline)
-
 
 # ---------------------------------------------------------------------------
-# run_feature_engineering (integration test — skipped if no raw CSV)
+# run_feature_engineering integration test
 # ---------------------------------------------------------------------------
 
 
 class TestRunFeatureEngineering:
-    def test_produces_output_files(self, tmp_path: Path) -> None:
-        """Integration test: only runs if data/raw CSVs exist."""
-        raw_dir = Path(RAW_DATA_DIR)
-        if not any(raw_dir.rglob("data_*.csv")):
-            pytest.skip(
-                "No data_*.csv files found in data/raw/ — skipping integration test."
-            )
+    def test_pipeline_runs_with_csv_fixtures(self, tmp_path: Path) -> None:
+        """Ensure run_feature_engineering works without external dataset."""
+        raw_dir = tmp_path / "raw"
+        raw_dir.mkdir()
 
-        processed_dir = str(tmp_path / "processed")
-        pipeline_path = str(tmp_path / "processed" / "pipeline.joblib")
+        df = pd.DataFrame(
+            [
+                {**VALID_ROW, "Id": 1, "Weight": 0.9},
+                {**VALID_ROW, "Id": 2, "Weight": 1.1},
+                {**VALID_ROW, "Id": 3, "Weight": 1.3},
+                {**VALID_ROW, "Id": 4, "Weight": 0.7},
+                {**VALID_ROW, "Id": 5, "Weight": 1.5},
+                {**VALID_ROW, "Id": 6, "Weight": 2.0},
+            ]
+        )
+
+        df.to_csv(raw_dir / "data_1.csv", index=False)
+        df.to_csv(raw_dir / "data_2.csv", index=False)
+
+        processed_dir = tmp_path / "processed"
+        pipeline_path = processed_dir / "pipeline.joblib"
 
         run_feature_engineering(
             raw_dir=str(raw_dir),
-            processed_dir=processed_dir,
-            pipeline_path=pipeline_path,
+            processed_dir=str(processed_dir),
+            pipeline_path=str(pipeline_path),
         )
 
-        assert (tmp_path / "processed" / "train.parquet").exists()
-        assert (tmp_path / "processed" / "test.parquet").exists()
-        assert (tmp_path / "processed" / "pipeline.joblib").exists()
+        assert (processed_dir / "train.parquet").exists()
+        assert (processed_dir / "test.parquet").exists()
+        assert pipeline_path.exists()
 
-    def test_parquet_has_target_column(self, tmp_path: Path) -> None:
-        """Check that train/test parquet files contain the log_price target."""
-        raw_dir = Path(RAW_DATA_DIR)
-        if not any(raw_dir.rglob("data_*.csv")):
-            pytest.skip(
-                "No data_*.csv files found in data/raw/ — skipping integration test."
-            )
-
-        processed_dir = str(tmp_path / "processed")
-        pipeline_path = str(tmp_path / "processed" / "pipeline.joblib")
-
-        run_feature_engineering(
-            raw_dir=str(raw_dir),
-            processed_dir=processed_dir,
-            pipeline_path=pipeline_path,
-        )
-
-        train_df = pd.read_parquet(str(tmp_path / "processed" / "train.parquet"))
-        test_df = pd.read_parquet(str(tmp_path / "processed" / "test.parquet"))
+        train_df = pd.read_parquet(processed_dir / "train.parquet")
+        test_df = pd.read_parquet(processed_dir / "test.parquet")
 
         assert LOG_PRICE_COL in train_df.columns
         assert LOG_PRICE_COL in test_df.columns

@@ -38,6 +38,7 @@ from src.constants import (
     LENGTH_COL,
     LOG_PRICE_COL,
     LOG_WEIGHT_COL,
+    MIN_SPLIT_SAMPLES,
     OUTLIER_MAX_PRICE,
     OUTLIER_MAX_WEIGHT,
     OUTLIER_MIN_DEPTH_MM,
@@ -193,6 +194,12 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
 
     # 1. Expand abbreviations
     df = _expand_abbreviations(df)
+
+    # Validate shapes against allowed categories
+    invalid_shapes = set(df["Shape"].dropna()) - set(SHAPE_CATEGORIES)
+    if invalid_shapes:
+        logger.error("Unknown shapes detected: %s", invalid_shapes)
+        raise ValueError(f"Unknown diamond shapes found: {invalid_shapes}")
 
     # 2. Parse Price
     df[PRICE_COL] = _parse_price(df[PRICE_COL])
@@ -418,6 +425,10 @@ def run_feature_engineering(
     # 3. Engineer features
     df_feat = _add_engineered_features(df_clean)
     X, y = _extract_target(df_feat)
+
+    if len(X) < MIN_SPLIT_SAMPLES:
+        logger.error("Dataset too small for train/test split: %s", len(X))
+        raise ValueError("Dataset too small for train/test split")
 
     # 4. Split — stratification not needed for regression
     X_train, X_test, y_train, y_test = train_test_split(
