@@ -196,6 +196,7 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
 
     # 2. Parse Price
     df[PRICE_COL] = _parse_price(df[PRICE_COL])
+    df["Weight"] = pd.to_numeric(df["Weight"], errors="raise").astype("float64")
 
     # 3. Parse Messurements → 3 float columns
     measurements = _parse_measurements(df["Messurements"])
