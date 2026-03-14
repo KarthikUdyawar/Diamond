@@ -95,12 +95,9 @@ def validate_raw_data(df: pd.DataFrame) -> None:
     missing = [col for col in RAW_COLUMNS if col not in df.columns]
     if missing:
         raise ValueError(
-            f"Raw data is missing expected columns: {missing}. "
-            f"Found columns: {list(df.columns)}"
+            f"Raw data is missing expected columns: {missing}. Found columns: {list(df.columns)}"
         )
-    logger.info(
-        "Raw data validation passed — all %d columns present.", len(RAW_COLUMNS)
-    )
+    logger.info("Raw data validation passed — all %d columns present.", len(RAW_COLUMNS))
 
 
 # ---------------------------------------------------------------------------
@@ -154,9 +151,7 @@ def _expand_abbreviations(df: pd.DataFrame) -> pd.DataFrame:
     df["Cut"] = df["Cut"].map(CUT_ABBREV).fillna(df["Cut"])
     df["Polish"] = df["Polish"].map(POLISH_ABBREV).fillna(df["Polish"])
     df["Symmetry"] = df["Symmetry"].map(SYMMETRY_ABBREV).fillna(df["Symmetry"])
-    df["Fluorescence"] = (
-        df["Fluorescence"].map(FLUORESCENCE_ABBREV).fillna(df["Fluorescence"])
-    )
+    df["Fluorescence"] = df["Fluorescence"].map(FLUORESCENCE_ABBREV).fillna(df["Fluorescence"])
     # Shape: all-caps in CSV → Title Case to match SHAPE_CATEGORIES
     df["Shape"] = df["Shape"].str.title()
     return df
