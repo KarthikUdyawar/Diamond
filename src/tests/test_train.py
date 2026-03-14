@@ -9,6 +9,8 @@ or real training required. Tests focus on:
   - Skip-if-exists logic
   - _register_best_model calls the right client methods
   - Orchestrator wires all pieces together correctly
+  - pipeline_path and processed_dir propagate end-to-end (regression for
+    the bug where internal callers fell back to src.constants.PIPELINE_PATH)
 """
 
 from __future__ import annotations
@@ -311,6 +313,7 @@ class TestTrainAndLog:
             patch("src.train.mlflow.sklearn.log_model"),
             patch("src.train.mlflow.log_artifact"),
             patch("src.train.mlflow.set_tag"),
+            patch("src.train.infer_signature"),
             patch("src.train.Path.exists", return_value=False),
         ):
             mock_start.return_value.__enter__ = MagicMock(return_value=mock_run)
@@ -351,6 +354,7 @@ class TestTrainAndLog:
             patch("src.train.mlflow.sklearn.log_model"),
             patch("src.train.mlflow.log_artifact"),
             patch("src.train.mlflow.set_tag"),
+            patch("src.train.infer_signature"),
             patch("src.train.Path.exists", return_value=False),
         ):
             mock_start.return_value.__enter__ = MagicMock(return_value=mock_run)
@@ -368,6 +372,47 @@ class TestTrainAndLog:
             )
 
         assert "training_time_sec" in logged_metrics
+
+    def test_custom_pipeline_path_used_for_artifact(self) -> None:
+        """pipeline_path argument must be used — not the global PIPELINE_PATH."""
+        from src.train import _train_and_log
+
+        mock_model = self._make_mock_model()
+        y = np.array([1.0, 2.0, 3.0])
+        mock_run = MagicMock()
+        mock_run.info.run_id = "r1"
+
+        artifact_calls: list[str] = []
+
+        with (
+            patch("src.train.mlflow.start_run") as mock_start,
+            patch("src.train.mlflow.log_params"),
+            patch("src.train.mlflow.log_metrics"),
+            patch("src.train.mlflow.sklearn.log_model"),
+            patch(
+                "src.train.mlflow.log_artifact",
+                side_effect=lambda *a, **kw: artifact_calls.append(a[0]),
+            ),
+            patch("src.train.mlflow.set_tag"),
+            patch("src.train.infer_signature"),
+            patch("src.train.Path.exists", return_value=True),
+        ):
+            mock_start.return_value.__enter__ = MagicMock(return_value=mock_run)
+            mock_start.return_value.__exit__ = MagicMock(return_value=False)
+            _train_and_log(
+                mock_model,
+                "catboost",
+                "run",
+                "exp",
+                np.ones((3, 2)),
+                np.ones((3, 2)),
+                y,
+                y,
+                ["a", "b"],
+                pipeline_path="/custom/path/pipeline.joblib",
+            )
+
+        assert "/custom/path/pipeline.joblib" in artifact_calls
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +464,60 @@ class TestRegisterBestModel:
 
 
 # ---------------------------------------------------------------------------
+# _is_already_registered
+# ---------------------------------------------------------------------------
+
+
+class TestIsAlreadyRegistered:
+    def test_returns_true_when_staged_version_matches_run_id(self) -> None:
+        from src.train import _is_already_registered
+
+        mv = MagicMock()
+        mv.run_id = "abc123"
+
+        with patch("src.train.mlflow.MlflowClient") as MockClient:
+            MockClient.return_value.get_latest_versions.return_value = [mv]
+            assert _is_already_registered("abc123") is True
+
+    def test_returns_false_when_staged_version_differs(self) -> None:
+        from src.train import _is_already_registered
+
+        mv = MagicMock()
+        mv.run_id = "different_run"
+
+        with patch("src.train.mlflow.MlflowClient") as MockClient:
+            MockClient.return_value.get_latest_versions.return_value = [mv]
+            assert _is_already_registered("abc123") is False
+
+    def test_returns_false_when_no_staged_versions(self) -> None:
+        from src.train import _is_already_registered
+
+        with patch("src.train.mlflow.MlflowClient") as MockClient:
+            MockClient.return_value.get_latest_versions.return_value = []
+            assert _is_already_registered("abc123") is False
+
+    def test_returns_false_when_model_does_not_exist(self) -> None:
+        """get_latest_versions raises if model name unknown — must return False."""
+        from src.train import _is_already_registered
+
+        with patch("src.train.mlflow.MlflowClient") as MockClient:
+            MockClient.return_value.get_latest_versions.side_effect = Exception(
+                "RESOURCE_DOES_NOT_EXIST"
+            )
+            assert _is_already_registered("abc123") is False
+
+    def test_queries_correct_stage(self) -> None:
+        from src.train import _is_already_registered
+
+        with patch("src.train.mlflow.MlflowClient") as MockClient:
+            MockClient.return_value.get_latest_versions.return_value = []
+            _is_already_registered("abc123", model_name="Diamond", stage="Staging")
+            MockClient.return_value.get_latest_versions.assert_called_once_with(
+                "Diamond", stages=["Staging"]
+            )
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator — run_training
 # ---------------------------------------------------------------------------
 
@@ -434,7 +533,8 @@ class TestRunTraining:
         return X, X, y, y, feature_names
 
     def test_skips_existing_runs(self) -> None:
-        """If all runs already exist, no trainer function should be called."""
+        """If all runs already exist and the staged model already points to the
+        best run_id, no trainer function and no registration should be called."""
         from src.train import run_training
 
         with (
@@ -447,7 +547,9 @@ class TestRunTraining:
             ),
             patch("src.train._run_exists", return_value=True),
             patch("src.train.mlflow.MlflowClient") as MockClient,
-            patch("src.train._register_best_model"),
+            patch("src.train._register_best_model") as mock_register,
+            patch("src.train._is_already_registered", return_value=True),
+            patch("src.train._verify_model_loads"),
         ):
             mock_run = MagicMock()
             mock_run.info.run_id = "existing_run"
@@ -467,6 +569,8 @@ class TestRunTraining:
                 mock_lgbm.assert_not_called()
                 mock_gbm.assert_not_called()
                 mock_optuna.assert_not_called()
+                # Already registered — must not create a duplicate version
+                mock_register.assert_not_called()
 
     def test_trains_all_when_no_existing_runs(self) -> None:
         """If no runs exist, all 4 baselines + optuna should be called."""
@@ -484,6 +588,7 @@ class TestRunTraining:
             ),
             patch("src.train._run_exists", return_value=False),
             patch("src.train._register_best_model"),
+            patch("src.train._is_already_registered", return_value=False),
             patch(
                 "src.train._train_catboost_baseline", return_value=dummy_result
             ) as mock_cb,
@@ -511,7 +616,6 @@ class TestRunTraining:
         """Best run (lowest RMSE) should be passed to _register_best_model."""
         from src.train import run_training
 
-        # Assign different RMSEs so we can verify the best is chosen
         results = {
             "catboost-baseline": ("run_cb", 0.50),
             "xgboost-baseline": ("run_xgb", 0.45),
@@ -536,11 +640,137 @@ class TestRunTraining:
             patch("src.train._train_lightgbm_baseline", return_value=call_sequence[2]),
             patch("src.train._train_gbm_baseline", return_value=call_sequence[3]),
             patch("src.train._run_optuna_tuning", return_value=call_sequence[4]),
+            patch("src.train._is_already_registered", return_value=False),
             patch("src.train._register_best_model") as mock_register,
         ):
             run_training()
-            # Best run is catboost-tuned with RMSE 0.30
             mock_register.assert_called_once_with("run_tuned")
+
+    def test_pipeline_path_forwarded_to_load_data(self) -> None:
+        """run_training(pipeline_path=X) must reach _load_data(pipeline_path=X)."""
+        from src.train import run_training
+
+        dummy = ("rid", 0.4)
+
+        with (
+            patch("src.train.mlflow.set_tracking_uri"),
+            patch("src.train._get_or_create_experiment", return_value="exp_1"),
+            patch(
+                "src.train._load_data", return_value=self._make_load_data_return()
+            ) as mock_load,
+            patch(
+                "src.train._select_features",
+                return_value=([0, 1, 2, 3], ["f0", "f1", "f2", "f3"]),
+            ),
+            patch("src.train._run_exists", return_value=False),
+            patch("src.train._train_catboost_baseline", return_value=dummy),
+            patch("src.train._train_xgboost_baseline", return_value=dummy),
+            patch("src.train._train_lightgbm_baseline", return_value=dummy),
+            patch("src.train._train_gbm_baseline", return_value=dummy),
+            patch("src.train._run_optuna_tuning", return_value=dummy),
+            patch("src.train._is_already_registered", return_value=False),
+            patch("src.train._register_best_model"),
+        ):
+            run_training(pipeline_path="/custom/pipeline.joblib")
+            _, kwargs = mock_load.call_args
+            assert kwargs.get("pipeline_path") == "/custom/pipeline.joblib"
+
+    def test_processed_dir_forwarded_to_load_data(self) -> None:
+        """run_training(processed_dir=X) must reach _load_data(processed_dir=X)."""
+        from src.train import run_training
+
+        dummy = ("rid", 0.4)
+
+        with (
+            patch("src.train.mlflow.set_tracking_uri"),
+            patch("src.train._get_or_create_experiment", return_value="exp_1"),
+            patch(
+                "src.train._load_data", return_value=self._make_load_data_return()
+            ) as mock_load,
+            patch(
+                "src.train._select_features",
+                return_value=([0, 1, 2, 3], ["f0", "f1", "f2", "f3"]),
+            ),
+            patch("src.train._run_exists", return_value=False),
+            patch("src.train._train_catboost_baseline", return_value=dummy),
+            patch("src.train._train_xgboost_baseline", return_value=dummy),
+            patch("src.train._train_lightgbm_baseline", return_value=dummy),
+            patch("src.train._train_gbm_baseline", return_value=dummy),
+            patch("src.train._run_optuna_tuning", return_value=dummy),
+            patch("src.train._is_already_registered", return_value=False),
+            patch("src.train._register_best_model"),
+        ):
+            run_training(processed_dir="/custom/processed")
+            _, kwargs = mock_load.call_args
+            assert kwargs.get("processed_dir") == "/custom/processed"
+
+    def test_pipeline_path_forwarded_to_baseline_trainers(self) -> None:
+        """Custom pipeline_path must reach each baseline wrapper,
+        not fall back to constant."""
+        from src.train import run_training
+
+        dummy = ("rid", 0.4)
+        captured: list[str] = []
+
+        def capture_pipeline(*args: object, **kwargs: object) -> tuple[str, float]:
+            captured.append(str(kwargs.get("pipeline_path", "")))
+            return dummy
+
+        with (
+            patch("src.train.mlflow.set_tracking_uri"),
+            patch("src.train._get_or_create_experiment", return_value="exp_1"),
+            patch("src.train._load_data", return_value=self._make_load_data_return()),
+            patch(
+                "src.train._select_features",
+                return_value=([0, 1, 2, 3], ["f0", "f1", "f2", "f3"]),
+            ),
+            patch("src.train._run_exists", return_value=False),
+            patch("src.train._train_catboost_baseline", side_effect=capture_pipeline),
+            patch("src.train._train_xgboost_baseline", side_effect=capture_pipeline),
+            patch("src.train._train_lightgbm_baseline", side_effect=capture_pipeline),
+            patch("src.train._train_gbm_baseline", side_effect=capture_pipeline),
+            patch("src.train._run_optuna_tuning", return_value=dummy),
+            patch("src.train._is_already_registered", return_value=False),
+            patch("src.train._register_best_model"),
+        ):
+            run_training(pipeline_path="/my/pipeline.joblib")
+
+        assert len(captured) == 4
+        assert all(p == "/my/pipeline.joblib" for p in captured)
+
+    def test_pipeline_path_forwarded_to_optuna(self) -> None:
+        """Custom pipeline_path must reach _run_optuna_tuning,
+        not fall back to constant."""
+        from src.train import run_training
+
+        dummy = ("rid", 0.4)
+        captured: list[str] = []
+
+        def capture_optuna(*args: object, **kwargs: object) -> tuple[str, float]:
+            captured.append(str(kwargs.get("pipeline_path", "")))
+            return dummy
+
+        with (
+            patch("src.train.mlflow.set_tracking_uri"),
+            patch("src.train._get_or_create_experiment", return_value="exp_1"),
+            patch("src.train._load_data", return_value=self._make_load_data_return()),
+            patch(
+                "src.train._select_features",
+                return_value=([0, 1, 2, 3], ["f0", "f1", "f2", "f3"]),
+            ),
+            patch("src.train._run_exists", return_value=False),
+            patch("src.train._train_catboost_baseline", return_value=dummy),
+            patch("src.train._train_xgboost_baseline", return_value=dummy),
+            patch("src.train._train_lightgbm_baseline", return_value=dummy),
+            patch("src.train._train_gbm_baseline", return_value=dummy),
+            patch("src.train._run_optuna_tuning", side_effect=capture_optuna),
+            patch("src.train._is_already_registered", return_value=False),
+            patch("src.train._register_best_model"),
+        ):
+            run_training(pipeline_path="/my/pipeline.joblib")
+
+        assert len(captured) == 1
+        assert captured[0] == "/my/pipeline.joblib"
 
 
 # ---------------------------------------------------------------------------
@@ -568,14 +798,12 @@ class TestLogCommonTags:
 
 
 # ---------------------------------------------------------------------------
-# _load_data
+# _load_data — processed_dir propagation
 # ---------------------------------------------------------------------------
 
 
 class TestLoadData:
     def _make_parquet_df(self, n: int = 20) -> pd.DataFrame:
-        import pandas as pd
-
         from src.constants import LOG_PRICE_COL
 
         rng = np.random.default_rng(0)
@@ -599,7 +827,6 @@ class TestLoadData:
         )
 
     def test_returns_correct_shapes(self) -> None:
-
         from src.train import _load_data
 
         df = self._make_parquet_df(20)
@@ -657,68 +884,102 @@ class TestLoadData:
         for cols in transform_inputs:
             assert LOG_PRICE_COL not in cols
 
+    def test_custom_processed_dir_used_for_parquet_paths(self) -> None:
+        """_load_data(processed_dir='/x') must read from /x/train.parquet,
+        not from the constant TRAIN_PARQUET_PATH."""
+        from src.constants import TEST_PARQUET_PATH, TRAIN_PARQUET_PATH
+        from src.train import _load_data
+
+        df = self._make_parquet_df(10)
+        read_paths: list[str] = []
+
+        def capture_read(path: str) -> pd.DataFrame:
+            read_paths.append(path)
+            return df
+
+        mock_pipeline = MagicMock()
+        mock_preprocessor = MagicMock()
+        mock_preprocessor.transform.return_value = np.ones((10, 5))
+        mock_preprocessor.transformers_ = []
+        mock_pipeline.named_steps = {"preprocessor": mock_preprocessor}
+
+        with (
+            patch("src.train.pd.read_parquet", side_effect=capture_read),
+            patch("src.train.load_pipeline", return_value=mock_pipeline),
+            patch("src.train._get_feature_names", return_value=["f0"] * 5),
+        ):
+            _load_data(processed_dir="/custom/processed")
+
+        assert all(p.startswith("/custom/processed") for p in read_paths)
+        assert TRAIN_PARQUET_PATH not in read_paths
+        assert TEST_PARQUET_PATH not in read_paths
+
 
 # ---------------------------------------------------------------------------
-# Baseline trainer wrappers — each creates the right model type
+# Baseline trainer wrappers — each creates the right model type and
+# forwards pipeline_path to _train_and_log
 # ---------------------------------------------------------------------------
 
 
 class TestBaselineTrainers:
     """Each _train_*_baseline wrapper should call _train_and_log with
-    the correct model class and run name."""
+    the correct model class and forward pipeline_path."""
 
     def _run_trainer(
         self,
-        trainer_fn: Callable[
-            [str, np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]],
-            tuple[str, float],
-        ],
-        expected_run_name: str,
+        trainer_fn: Callable[..., tuple[str, float]],
         expected_model_cls: type,
-    ) -> None:
-        dummy = ("run_x", 0.5)
-        captured_model: list[object] = []
+    ) -> tuple[list[object], list[object]]:
+        """
+        Invoke *trainer_fn* with a custom pipeline_path and return
+        (captured_models, captured_pipeline_paths).
+        """
+        dummy: tuple[str, float] = ("run_x", 0.5)
+        captured_models: list[object] = []
+        captured_paths: list[object] = []
 
         def capture(*args: object, **kwargs: object) -> tuple[str, float]:
-            captured_model.append(args[0])
+            captured_models.append(args[0])
+            captured_paths.append(kwargs.get("pipeline_path", "NOT_PASSED"))
             return dummy
 
         with patch("src.train._train_and_log", side_effect=capture):
-            result = trainer_fn(
+            trainer_fn(
                 "exp_1",
                 np.ones((10, 5)),
                 np.ones((5, 5)),
                 np.ones(10),
                 np.ones(5),
                 ["f1", "f2", "f3", "f4", "f5"],
+                pipeline_path="/test/pipeline.joblib",
             )
 
-        assert result == dummy
-        assert isinstance(captured_model[0], expected_model_cls)
+        assert isinstance(captured_models[0], expected_model_cls)
+        return captured_models, captured_paths
 
     def test_catboost_baseline_model_type(self) -> None:
         from src.train import _train_catboost_baseline
 
-        self._run_trainer(
-            _train_catboost_baseline, "catboost-baseline", CatBoostRegressor
-        )
+        _, paths = self._run_trainer(_train_catboost_baseline, CatBoostRegressor)
+        assert paths[0] == "/test/pipeline.joblib"
 
     def test_xgboost_baseline_model_type(self) -> None:
         from src.train import _train_xgboost_baseline
 
-        self._run_trainer(_train_xgboost_baseline, "xgboost-baseline", XGBRegressor)
+        _, paths = self._run_trainer(_train_xgboost_baseline, XGBRegressor)
+        assert paths[0] == "/test/pipeline.joblib"
 
     def test_lightgbm_baseline_model_type(self) -> None:
         from src.train import _train_lightgbm_baseline
 
-        self._run_trainer(_train_lightgbm_baseline, "lightgbm-baseline", LGBMRegressor)
+        _, paths = self._run_trainer(_train_lightgbm_baseline, LGBMRegressor)
+        assert paths[0] == "/test/pipeline.joblib"
 
     def test_gbm_baseline_model_type(self) -> None:
         from src.train import _train_gbm_baseline
 
-        self._run_trainer(
-            _train_gbm_baseline, "gbm-baseline", GradientBoostingRegressor
-        )
+        _, paths = self._run_trainer(_train_gbm_baseline, GradientBoostingRegressor)
+        assert paths[0] == "/test/pipeline.joblib"
 
 
 # ---------------------------------------------------------------------------
@@ -754,6 +1015,7 @@ class TestTrainAndLogExtended:
             patch("src.train.mlflow.sklearn.log_model"),
             patch("src.train.mlflow.log_artifact"),
             patch("src.train.mlflow.set_tag"),
+            patch("src.train.infer_signature"),
             patch("src.train.Path.exists", return_value=False),
         ):
             mock_start.return_value.__enter__ = MagicMock(return_value=mock_run)
@@ -794,6 +1056,7 @@ class TestTrainAndLogExtended:
                 side_effect=lambda *a, **kw: artifact_calls.append((a, kw)),
             ),
             patch("src.train.mlflow.set_tag"),
+            patch("src.train.infer_signature"),
             patch("src.train.Path.exists", return_value=True),
         ):
             mock_start.return_value.__enter__ = MagicMock(return_value=mock_run)
@@ -855,6 +1118,7 @@ class TestRunOptunaTuning:
             patch("src.train.mlflow.sklearn.log_model"),
             patch("src.train.mlflow.log_artifact"),
             patch("src.train.mlflow.set_tag"),
+            patch("src.train.infer_signature"),
             patch(
                 "src.train.mlflow.get_tracking_uri",
                 return_value="http://localhost:5000",
@@ -878,6 +1142,56 @@ class TestRunOptunaTuning:
         assert run_id == "tuned_run"
         assert isinstance(rmse, float)
 
+    def test_custom_pipeline_path_used(self) -> None:
+        """pipeline_path kwarg must reach the Path.exists / log_artifact call,
+        not fall back to PIPELINE_PATH constant."""
+        from src.train import _run_optuna_tuning
+
+        mock_run = MagicMock()
+        mock_run.info.run_id = "r"
+        study = self._make_study()
+        mock_final_model = MagicMock()
+        mock_final_model.predict.return_value = np.ones(5)
+
+        artifact_calls: list[str] = []
+
+        with (
+            patch("src.train.optuna.logging.set_verbosity"),
+            patch("src.train.MLflowCallback"),
+            patch("src.train.optuna.create_study", return_value=study),
+            patch("src.train.mlflow.start_run") as mock_start,
+            patch("src.train.mlflow.log_params"),
+            patch("src.train.mlflow.log_metrics"),
+            patch("src.train.mlflow.sklearn.log_model"),
+            patch(
+                "src.train.mlflow.log_artifact",
+                side_effect=lambda *a, **kw: artifact_calls.append(a[0]),
+            ),
+            patch("src.train.mlflow.set_tag"),
+            patch("src.train.infer_signature"),
+            patch(
+                "src.train.mlflow.get_tracking_uri",
+                return_value="http://localhost:5000",
+            ),
+            patch("src.train.CatBoostRegressor", return_value=mock_final_model),
+            patch("src.train.Path.exists", return_value=True),
+        ):
+            mock_start.return_value.__enter__ = MagicMock(return_value=mock_run)
+            mock_start.return_value.__exit__ = MagicMock(return_value=False)
+
+            _run_optuna_tuning(
+                "exp_1",
+                np.ones((10, 4)),
+                np.ones((5, 4)),
+                np.ones(10),
+                np.ones(5),
+                ["f1", "f2", "f3", "f4"],
+                n_trials=2,
+                pipeline_path="/custom/pipeline.joblib",
+            )
+
+        assert "/custom/pipeline.joblib" in artifact_calls
+
     def test_study_optimized_with_n_trials(self) -> None:
         from src.train import _run_optuna_tuning
 
@@ -897,6 +1211,7 @@ class TestRunOptunaTuning:
             patch("src.train.mlflow.sklearn.log_model"),
             patch("src.train.mlflow.log_artifact"),
             patch("src.train.mlflow.set_tag"),
+            patch("src.train.infer_signature"),
             patch(
                 "src.train.mlflow.get_tracking_uri",
                 return_value="http://localhost:5000",

@@ -27,10 +27,10 @@ from dotenv import load_dotenv
 from lightgbm import LGBMRegressor
 from mlflow.models import infer_signature
 from optuna_integration.mlflow import MLflowCallback
-from sklearn.base import BaseEstimator
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
 from xgboost import XGBRegressor
 
 from src.constants import (
@@ -135,12 +135,17 @@ def _log_common_tags(model_type: str) -> None:
 
 
 def _load_data(
-    train_path: str = TRAIN_PARQUET_PATH,
-    test_path: str = TEST_PARQUET_PATH,
+    processed_dir: str = PROCESSED_DIR,
     pipeline_path: str = PIPELINE_PATH,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """
-    Load processed parquet files and apply the fitted pipeline.
+    Load processed parquet files from *processed_dir* and apply the fitted
+    pipeline at *pipeline_path*.
+
+    Parquet paths are derived from *processed_dir* so that callers who pass a
+    custom directory actually get data from that directory (previously the paths
+    were hardcoded to the constants, making the *processed_dir* argument a
+    no-op).
 
     Returns
     -------
@@ -152,6 +157,11 @@ def _load_data(
         Output feature names from the ColumnTransformer.
     """
     from src.constants import LOG_PRICE_COL
+
+    # Derive parquet paths from processed_dir so the argument is honoured.
+    processed = Path(processed_dir)
+    train_path = str(processed / Path(TRAIN_PARQUET_PATH).name)
+    test_path = str(processed / Path(TEST_PARQUET_PATH).name)
 
     train_df = pd.read_parquet(train_path)
     test_df = pd.read_parquet(test_path)
@@ -220,7 +230,7 @@ def _select_features(
         verbose=0,
     )
     selector.fit(X_train, y_train)
-    importances = selector.get_feature_importance()
+    importances: np.ndarray = np.asarray(selector.get_feature_importance())
     ranked = np.argsort(importances)[::-1]
     selected_indices = sorted(ranked[:n_features].tolist())
     selected_names = [feature_names[i] for i in selected_indices]
@@ -234,7 +244,7 @@ def _select_features(
 
 
 def _train_and_log(
-    model: BaseEstimator,
+    model: Any,  # noqa: ANN401
     model_type: str,
     run_name: str,
     experiment_id: str,
@@ -254,6 +264,10 @@ def _train_and_log(
     extra_params:
         Additional params to log beyond what the model exposes (e.g. Optuna
         best params that aren't in model.get_params()).
+    pipeline_path:
+        Path to the fitted pipeline joblib to attach as an MLflow artifact.
+        Callers should always pass this explicitly so the logged artifact
+        matches the pipeline that actually produced the features for this run.
     """
     with mlflow.start_run(run_name=run_name, experiment_id=experiment_id) as run:
         _log_common_tags(model_type)
@@ -282,7 +296,7 @@ def _train_and_log(
         signature = infer_signature(X_train, model.predict(X_train))
         mlflow.sklearn.log_model(model, "model", signature=signature)
 
-        # Log pipeline artifact
+        # Log pipeline artifact — uses the caller-supplied path, never the global
         if Path(pipeline_path).exists():
             mlflow.log_artifact(pipeline_path, artifact_path="pipeline")
 
@@ -310,6 +324,7 @@ def _train_catboost_baseline(
     y_train: np.ndarray,
     y_test: np.ndarray,
     selected_names: list[str],
+    pipeline_path: str = PIPELINE_PATH,
 ) -> tuple[str, float]:
     model = CatBoostRegressor(
         iterations=500,
@@ -329,6 +344,7 @@ def _train_catboost_baseline(
         y_train,
         y_test,
         selected_names,
+        pipeline_path=pipeline_path,
     )
 
 
@@ -339,6 +355,7 @@ def _train_xgboost_baseline(
     y_train: np.ndarray,
     y_test: np.ndarray,
     selected_names: list[str],
+    pipeline_path: str = PIPELINE_PATH,
 ) -> tuple[str, float]:
     model = XGBRegressor(
         n_estimators=500,
@@ -359,6 +376,7 @@ def _train_xgboost_baseline(
         y_train,
         y_test,
         selected_names,
+        pipeline_path=pipeline_path,
     )
 
 
@@ -369,6 +387,7 @@ def _train_lightgbm_baseline(
     y_train: np.ndarray,
     y_test: np.ndarray,
     selected_names: list[str],
+    pipeline_path: str = PIPELINE_PATH,
 ) -> tuple[str, float]:
     model = LGBMRegressor(
         n_estimators=500,
@@ -388,6 +407,7 @@ def _train_lightgbm_baseline(
         y_train,
         y_test,
         selected_names,
+        pipeline_path=pipeline_path,
     )
 
 
@@ -398,6 +418,7 @@ def _train_gbm_baseline(
     y_train: np.ndarray,
     y_test: np.ndarray,
     selected_names: list[str],
+    pipeline_path: str = PIPELINE_PATH,
 ) -> tuple[str, float]:
     model = GradientBoostingRegressor(
         n_estimators=300,
@@ -416,6 +437,7 @@ def _train_gbm_baseline(
         y_train,
         y_test,
         selected_names,
+        pipeline_path=pipeline_path,
     )
 
 
@@ -432,10 +454,18 @@ def _run_optuna_tuning(
     y_test: np.ndarray,
     selected_names: list[str],
     n_trials: int = OPTUNA_N_TRIALS,
+    pipeline_path: str = PIPELINE_PATH,
 ) -> tuple[str, float]:
     """
     Run Optuna HPO on CatBoost, each trial logged as a nested MLflow run.
     Re-trains the final model with best params and logs as *catboost-tuned*.
+
+    Parameters
+    ----------
+    pipeline_path:
+        Path to the fitted pipeline joblib to attach as an MLflow artifact.
+        Forwarded from run_training() so the logged artifact always matches
+        the pipeline that produced the features for this run.
 
     Returns
     -------
@@ -448,6 +478,13 @@ def _run_optuna_tuning(
         tracking_uri=mlflow.get_tracking_uri(),
         metric_name="rmse",
         mlflow_kwargs={"experiment_id": experiment_id, "nested": True},
+    )
+
+    # Carve a fixed validation split out of the training data.
+    # X_test / y_test remain completely untouched until the final one-time
+    # evaluation of the best model after HPO is complete.
+    X_tr, X_val, y_tr, y_val = train_test_split(
+        X_train, y_train, test_size=0.2, random_state=RANDOM_STATE
     )
 
     def objective(trial: optuna.Trial) -> float:
@@ -473,9 +510,9 @@ def _run_optuna_tuning(
             random_seed=RANDOM_STATE,
             verbose=0,
         )
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
+        model.fit(X_tr, y_tr)
+        y_pred = model.predict(X_val)
+        rmse = float(np.sqrt(mean_squared_error(y_val, y_pred)))
         return rmse
 
     # Run study — wrap in a parent run so trials nest under catboost-tuned
@@ -513,15 +550,18 @@ def _run_optuna_tuning(
         all_params: dict[str, Any] = {**best_params}
         all_params["n_features_selected"] = len(selected_names)
         all_params["train_size"] = len(X_train)
+        all_params["optuna_val_size"] = len(X_val)
         all_params["test_size"] = len(X_test)
         all_params["optuna_n_trials"] = n_trials
 
         mlflow.log_params({str(k): str(v) for k, v in all_params.items()})
         mlflow.log_metrics(metrics)
+
+        # Log model artifact with signature
         signature = infer_signature(X_train, final_model.predict(X_train))
         mlflow.sklearn.log_model(final_model, "model", signature=signature)
 
-        pipeline_path = PIPELINE_PATH
+        # Log pipeline artifact — uses the caller-supplied path, never the global
         if Path(pipeline_path).exists():
             mlflow.log_artifact(pipeline_path, artifact_path="pipeline")
 
@@ -544,6 +584,27 @@ def _run_optuna_tuning(
 # ---------------------------------------------------------------------------
 # Model registry
 # ---------------------------------------------------------------------------
+
+
+def _is_already_registered(
+    run_id: str,
+    model_name: str = MLFLOW_MODEL_NAME,
+    stage: str = MLFLOW_MODEL_STAGE,
+) -> bool:
+    """
+    Return True if a model version in *stage* already points to *run_id*.
+
+    Prevents mlflow.register_model() from creating a duplicate version on
+    every pipeline re-run when all training runs were skipped (idempotency
+    guard for run_training()).
+    """
+    client = mlflow.MlflowClient()
+    try:
+        staged = client.get_latest_versions(model_name, stages=[stage])
+        return any(mv.run_id == run_id for mv in staged)
+    except Exception:
+        # Model doesn't exist in registry yet — safe to register.
+        return False
 
 
 def _verify_model_loads(model_name: str, stage: str) -> None:
@@ -600,11 +661,17 @@ def run_training(
     """
     Full training orchestrator.
 
-    1. Load transformed train/test data.
+    1. Load transformed train/test data from *processed_dir* using the
+       pipeline at *pipeline_path*.
     2. CatBoost-based feature selection → top 14 features.
     3. Train 4 baselines (skip each if a run with that name already exists).
-    4. Run 50 Optuna trials on CatBoost (skip if catboost-tuned already exists).
+    4. Run Optuna trials on CatBoost (skip if catboost-tuned already exists).
     5. Register the best run (lowest RMSE) as Diamond/Production.
+
+    Both *processed_dir* and *pipeline_path* are forwarded all the way through
+    to _load_data, every baseline wrapper, and _run_optuna_tuning so that the
+    MLflow artifact logged for each run is always the same pipeline that
+    produced the features for that run.
     """
     load_dotenv(override=True)
     tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
@@ -614,8 +681,9 @@ def run_training(
 
     experiment_id = _get_or_create_experiment(experiment_name)
 
-    # Load data
+    # Load data — both processed_dir and pipeline_path are honoured here
     X_train, X_test, y_train, y_test, feature_names = _load_data(
+        processed_dir=processed_dir,
         pipeline_path=pipeline_path,
     )
 
@@ -637,7 +705,6 @@ def run_training(
     for run_name, trainer_fn in baseline_trainers:
         if _run_exists(experiment_id, run_name):
             logger.info("Skipping '%s' — run already exists.", run_name)
-            # Fetch existing run_id + rmse for registry logic
             client = mlflow.MlflowClient()
             existing = client.search_runs(
                 experiment_ids=[experiment_id],
@@ -656,6 +723,7 @@ def run_training(
                 y_train,
                 y_test,
                 selected_names,
+                pipeline_path=pipeline_path,  # forwarded — never falls back to constant
             )
             results[run_name] = (run_id, rmse)
 
@@ -681,6 +749,7 @@ def run_training(
             y_test,
             selected_names,
             n_trials=n_trials,
+            pipeline_path=pipeline_path,  # forwarded — never falls back to constant
         )
         results[RUN_NAME_CATBOOST_TUNED] = (run_id, rmse)
 
@@ -694,8 +763,17 @@ def run_training(
         best_rmse,
     )
 
-    # Register
-    _register_best_model(best_run_id)
+    # Register — skip if the staged version already points to this run
+    if _is_already_registered(best_run_id):
+        logger.info(
+            "Skipping registration — '%s/%s' already points to run_id=%s.",
+            MLFLOW_MODEL_NAME,
+            MLFLOW_MODEL_STAGE,
+            best_run_id,
+        )
+        _verify_model_loads(MLFLOW_MODEL_NAME, MLFLOW_MODEL_STAGE)
+    else:
+        _register_best_model(best_run_id)
     logger.info("Training pipeline complete.")
 
 

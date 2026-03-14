@@ -109,7 +109,7 @@ make ui            Open Streamlit dashboard in browser
 make api-docs      Open FastAPI Swagger docs in browser
 make clean         Remove containers, volumes, mlruns/
 make clean-cache   Remove Python/tool caches
-make reset-mlflow  Wipe MLflow DB and artifacts (use before re-training from scratch)
+make reset-mlflow  Wipe MLflow DB and artifacts, then run make up-infra before re-training from scratch
 ```
 
 ---

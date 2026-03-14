@@ -162,4 +162,5 @@ backup/
 
 # Dataset
 /data/*
+mlruns/
 catboost_info/
