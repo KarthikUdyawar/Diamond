@@ -602,8 +602,8 @@ def _is_already_registered(
     try:
         staged = client.get_latest_versions(model_name, stages=[stage])
         return any(mv.run_id == run_id for mv in staged)
-    except Exception:
-        # Model doesn't exist in registry yet — safe to register.
+    except mlflow.exceptions.MlflowException:
+        logger.debug("Model '%s' not yet in registry.", model_name)
         return False
 
 

@@ -23,6 +23,7 @@ import pandas as pd
 import pytest
 from catboost import CatBoostRegressor
 from lightgbm import LGBMRegressor
+from mlflow import MlflowException
 from sklearn.ensemble import GradientBoostingRegressor
 from xgboost import XGBRegressor
 
@@ -501,7 +502,7 @@ class TestIsAlreadyRegistered:
         from src.train import _is_already_registered
 
         with patch("src.train.mlflow.MlflowClient") as MockClient:
-            MockClient.return_value.get_latest_versions.side_effect = Exception(
+            MockClient.return_value.get_latest_versions.side_effect = MlflowException(
                 "RESOURCE_DOES_NOT_EXIST"
             )
             assert _is_already_registered("abc123") is False
