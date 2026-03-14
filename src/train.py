@@ -78,7 +78,12 @@ def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]
     r2 = float(r2_score(y_true, y_pred))
     # MAPE — guard against near-zero actuals
     mask = np.abs(y_true) > 1e-6
-    mape = float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
+    if np.any(mask):
+        mape = float(
+            np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100
+        )
+    else:
+        mape = 0.0
     return {"rmse": rmse, "mae": mae, "r2": r2, "mape": mape}
 
 
@@ -301,10 +306,12 @@ def _train_and_log(
             mlflow.log_artifact(pipeline_path, artifact_path="pipeline")
 
         # Log selected feature names
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
-            json.dump(selected_names, tmp, indent=2)
-            features_path = tmp.name
-        mlflow.log_artifact(features_path)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            features_path = Path(tmpdir) / "selected_features.json"
+            features_path.write_text(
+                json.dumps(selected_names, indent=2), encoding="utf-8"
+            )
+            mlflow.log_artifact(str(features_path))
 
         run_id = run.info.run_id
         logger.info(
@@ -565,10 +572,12 @@ def _run_optuna_tuning(
         if Path(pipeline_path).exists():
             mlflow.log_artifact(pipeline_path, artifact_path="pipeline")
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
-            json.dump(selected_names, tmp, indent=2)
-            features_path = tmp.name
-        mlflow.log_artifact(features_path)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            features_path = Path(tmpdir) / "selected_features.json"
+            features_path.write_text(
+                json.dumps(selected_names, indent=2), encoding="utf-8"
+            )
+            mlflow.log_artifact(str(features_path))
 
         run_id = parent_run.info.run_id
         logger.info(
@@ -602,9 +611,14 @@ def _is_already_registered(
     try:
         staged = client.get_latest_versions(model_name, stages=[stage])
         return any(mv.run_id == run_id for mv in staged)
-    except mlflow.exceptions.MlflowException:
-        logger.debug("Model '%s' not yet in registry.", model_name)
-        return False
+    except mlflow.exceptions.MlflowException as exc:
+        error_code = getattr(exc, "error_code", None)
+        if error_code == "RESOURCE_DOES_NOT_EXIST" or "RESOURCE_DOES_NOT_EXIST" in str(
+            exc
+        ):
+            logger.debug("Model '%s' not yet in registry.", model_name)
+            return False
+        raise
 
 
 def _verify_model_loads(model_name: str, stage: str) -> None:
@@ -704,7 +718,7 @@ def run_training(
 
     for run_name, trainer_fn in baseline_trainers:
         if _run_exists(experiment_id, run_name):
-            logger.info("Skipping '%s' — run already exists.", run_name)
+            logger.info("Checking '%s' — run exists, retrieving metrics.", run_name)
             client = mlflow.MlflowClient()
             existing = client.search_runs(
                 experiment_ids=[experiment_id],
@@ -714,6 +728,22 @@ def run_training(
             if existing:
                 run_id = existing[0].info.run_id
                 rmse = existing[0].data.metrics.get("rmse", float("inf"))
+                results[run_name] = (run_id, rmse)
+            else:
+                logger.warning(
+                    "Run '%s' reported as existing but search_runs returned empty. "
+                    "Falling back to training.",
+                    run_name,
+                )
+                run_id, rmse = trainer_fn(
+                    experiment_id,
+                    X_train_sel,
+                    X_test_sel,
+                    y_train,
+                    y_test,
+                    selected_names,
+                    pipeline_path=pipeline_path,
+                )
                 results[run_name] = (run_id, rmse)
         else:
             run_id, rmse = trainer_fn(
@@ -729,7 +759,9 @@ def run_training(
 
     # Optuna tuning — skip if already exists
     if _run_exists(experiment_id, RUN_NAME_CATBOOST_TUNED):
-        logger.info("Skipping '%s' — run already exists.", RUN_NAME_CATBOOST_TUNED)
+        logger.info(
+            "Checking '%s' — run exists, retrieving metrics.", RUN_NAME_CATBOOST_TUNED
+        )
         client = mlflow.MlflowClient()
         existing = client.search_runs(
             experiment_ids=[experiment_id],
@@ -739,6 +771,23 @@ def run_training(
         if existing:
             run_id = existing[0].info.run_id
             rmse = existing[0].data.metrics.get("rmse", float("inf"))
+            results[RUN_NAME_CATBOOST_TUNED] = (run_id, rmse)
+        else:
+            logger.warning(
+                "Run '%s' reported as existing but search_runs returned empty. "
+                "Falling back to tuning.",
+                RUN_NAME_CATBOOST_TUNED,
+            )
+            run_id, rmse = _run_optuna_tuning(
+                experiment_id,
+                X_train_sel,
+                X_test_sel,
+                y_train,
+                y_test,
+                selected_names,
+                n_trials=n_trials,
+                pipeline_path=pipeline_path,
+            )
             results[RUN_NAME_CATBOOST_TUNED] = (run_id, rmse)
     else:
         run_id, rmse = _run_optuna_tuning(
@@ -752,6 +801,15 @@ def run_training(
             pipeline_path=pipeline_path,  # forwarded — never falls back to constant
         )
         results[RUN_NAME_CATBOOST_TUNED] = (run_id, rmse)
+
+    # Defensive check: ensure we have at least one run before proceeding
+    if not results:
+        raise RuntimeError(
+            "No runs were collected. This could indicate a race condition where "
+            "all runs were reported as existing but none were found in search_runs, "
+            "or a failure in the training logic. Check MLflow server state and "
+            "experiment integrity."
+        )
 
     # Find best run
     best_run_name = min(results, key=lambda k: results[k][1])
