@@ -157,5 +157,10 @@ cython_debug/
 # backup
 backup/
 
+# ruff
+.ruff_cache
+
 # Dataset
 /data/*
+mlruns/
+catboost_info/

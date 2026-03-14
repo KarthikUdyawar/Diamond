@@ -270,9 +270,7 @@ class TestRunFeatureEngineering:
         )
 
         df.to_csv(standard_dir / "data_1.csv", index=False)
-        df.assign(**{"Data Url": "fixture"}).to_csv(
-            alt_layout_dir / "data_2.csv", index=False
-        )
+        df.assign(**{"Data Url": "fixture"}).to_csv(alt_layout_dir / "data_2.csv", index=False)
 
         processed_dir = tmp_path / "processed"
         pipeline_path = processed_dir / "pipeline.joblib"

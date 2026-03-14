@@ -200,3 +200,27 @@ PROCESSED_DIR: str = "data/processed"
 TRAIN_PARQUET_PATH: str = "data/processed/train.parquet"
 TEST_PARQUET_PATH: str = "data/processed/test.parquet"
 PIPELINE_PATH: str = "data/processed/pipeline.joblib"
+
+# MLflow experiment + run names  (Day 3)
+MLFLOW_EXPERIMENT_NAME: str = "diamond-price"
+RUN_NAME_CATBOOST: str = "catboost-baseline"
+RUN_NAME_XGBOOST: str = "xgboost-baseline"
+RUN_NAME_LIGHTGBM: str = "lightgbm-baseline"
+RUN_NAME_GBM: str = "gbm-baseline"
+RUN_NAME_CATBOOST_TUNED: str = "catboost-tuned"
+
+# Feature selection  (Day 3)
+N_FEATURES_TO_SELECT: int = 14
+
+# Optuna  (Day 3)
+OPTUNA_N_TRIALS: int = 50
+OPTUNA_CB_ITERATIONS_LOW: int = 300
+OPTUNA_CB_ITERATIONS_HIGH: int = 1000
+OPTUNA_CB_LR_LOW: float = 1e-3
+OPTUNA_CB_LR_HIGH: float = 0.3
+OPTUNA_CB_DEPTH_LOW: int = 4
+OPTUNA_CB_DEPTH_HIGH: int = 10
+OPTUNA_CB_L2_LOW: float = 1.0
+OPTUNA_CB_L2_HIGH: float = 10.0
+OPTUNA_CB_SUBSAMPLE_LOW: float = 0.6
+OPTUNA_CB_SUBSAMPLE_HIGH: float = 1.0
