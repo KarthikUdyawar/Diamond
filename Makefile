@@ -172,3 +172,7 @@ clean-cache: ## Remove Python/tool caches only
 	find . -type d -name .mypy_cache  -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .ruff_cache  -exec rm -rf {} + 2>/dev/null || true
 	@echo "✅ Caches cleared."
+
+reset-mlflow: ## Wipe MLflow DB and artifacts — run make up-infra after
+	docker compose down
+	docker volume rm diamond_postgres-data diamond_mlflow-artifacts || true

@@ -30,7 +30,7 @@ Diamond trains a **CatBoost regression model** on ~6,300 natural diamond records
 │                    artifacts)     registry                  │
 └─────────────────────────────────────────────────────────────┘
 
-ML Pipeline (runs inside api container via make train):
+ML Pipeline (runs via make train or uv run -m src.train):
 
   data/raw/              src/features.py       src/train.py
   Diamonds/              _merge_raw_csvs() ──▶  CatBoost + 3
@@ -109,6 +109,7 @@ make ui            Open Streamlit dashboard in browser
 make api-docs      Open FastAPI Swagger docs in browser
 make clean         Remove containers, volumes, mlruns/
 make clean-cache   Remove Python/tool caches
+make reset-mlflow  Wipe MLflow DB and artifacts (use before re-training from scratch)
 ```
 
 ---
@@ -119,23 +120,24 @@ make clean-cache   Remove Python/tool caches
 Diamond/
 ├── src/                    # ML pipeline
 │   ├── constants.py        # Column names, category orders, abbreviation maps, paths
-│   ├── features.py         # Feature engineering pipeline (Day 2) ✅
-│   ├── train.py            # Model training + MLflow logging (Day 3)
+│   ├── features.py         # Feature engineering pipeline ✅
+│   ├── train.py            # Model training + MLflow logging ✅
 │   ├── explain.py          # SHAP explainability (Day 4)
 │   └── tests/
-│       └── test_features.py
-├── api/                    # FastAPI REST API
-│   ├── main.py             # App factory + lifespan
-│   ├── schemas.py          # Pydantic v2 models
+│       ├── test_features.py
+│       └── test_train.py
+├── api/                    # FastAPI REST API (Day 5)
+│   ├── main.py
+│   ├── schemas.py
 │   ├── routes/             # predict · explain · health
 │   ├── services/           # model · shap
 │   ├── Dockerfile
 │   └── tests/
-├── ui/                     # Streamlit dashboard
-│   ├── app.py              # 3-tab app
-│   ├── api_client.py       # All httpx calls
-│   ├── constants.py        # Default inputs
-│   ├── templates.py        # Plain-English sentence templates
+├── ui/                     # Streamlit dashboard (Day 6)
+│   ├── app.py
+│   ├── api_client.py
+│   ├── constants.py
+│   ├── templates.py
 │   └── Dockerfile
 ├── data/
 │   ├── raw/                # Kaggle download — Diamonds/ + Diamonds2/ subdirs
@@ -143,7 +145,7 @@ Diamond/
 ├── notebooks/              # EDA only — do not modify
 ├── docs/                   # PRD, Design Doc, Tech Rules, TODO, Day logs
 ├── docker-compose.yml
-├── pyproject.toml          # uv, all pinned deps, ruff + mypy config
+├── pyproject.toml
 ├── Makefile
 └── .env.example
 ```
@@ -154,8 +156,6 @@ Diamond/
 
 **Source:** [Natural Diamonds Prices + Images](https://www.kaggle.com/datasets/harshitlakhani/natural-diamonds-prices-images) — Kaggle
 
-The raw download contains two subdirectories (`Diamonds/` and `Diamonds2/`) with 15 per-shape CSV files. `make features` merges them automatically — no manual preprocessing required.
-
 **Schema:**
 
 | Column       | Type        | Description                                                    |
@@ -163,13 +163,31 @@ The raw download contains two subdirectories (`Diamonds/` and `Diamonds2/`) with
 | Shape        | categorical | Cushion, Emerald, Heart, Marquise, Oval, Pear, Princess, Round |
 | Weight       | float       | Carats                                                         |
 | Clarity      | ordinal     | I3 → FL (11 grades)                                            |
-| Colour       | ordinal     | FANCY → D (20 grades including range grades)                   |
-| Cut          | ordinal     | Fair → Excellent (4 grades — EX/VG/GD/FR in CSV)               |
+| Colour       | ordinal     | FANCY → D (20 grades)                                          |
+| Cut          | ordinal     | Fair → Excellent (4 grades)                                    |
 | Polish       | ordinal     | Fair → Excellent (4 grades)                                    |
 | Symmetry     | ordinal     | Fair → Excellent (4 grades)                                    |
-| Fluorescence | ordinal     | Very Strong → None (7 grades — abbreviated in CSV)             |
+| Fluorescence | ordinal     | Very Strong → None (7 grades)                                  |
 | Messurements | string      | `"L-W×D"` — parsed into length, width, depth_mm                |
-| Price        | float       | Target — plain float in CSV                                    |
+| Price        | float       | Target — log1p-transformed during training                     |
+
+---
+
+## Model
+
+**Primary model:** CatBoostRegressor, tuned with 50 Optuna trials (TPESampler + MedianPruner).
+
+**Selected features (14 of 22):** Colour, Clarity, Polish, Symmetry, Fluorescence, Shape_Pear, Shape_Round, Weight, length, width, depth_mm, volume, carat_per_volume, log_weight.
+
+**Registered:** `models:/Diamond/Production` in MLflow Model Registry.
+
+| Run               | R² (log-space) |
+| ----------------- | -------------- |
+| catboost-baseline | 0.9674         |
+| xgboost-baseline  | 0.9685         |
+| lightgbm-baseline | 0.9656         |
+| gbm-baseline      | 0.9661         |
+| catboost-tuned    | best           |
 
 ---
 
@@ -220,18 +238,15 @@ Same request body as `/predict`. Returns SHAP values and a base64 waterfall plot
 ## Development
 
 ```bash
-# Lint + type check
-make lint
-
-# Auto-format
-make format
-
-# Run tests with coverage
-make test
-
-# Pre-commit (runs automatically on git commit)
-make pre-commit
+make lint          # ruff + mypy
+make format        # auto-format
+make test          # pytest with coverage
+make pre-commit    # run pre-commit hooks on all files
 ```
+
+**Note on running locally vs Docker:**
+- `make train` runs inside the Docker api container (recommended for production runs)
+- `uv run -m src.train` runs locally and also works — artifacts are uploaded via the MLflow HTTP proxy (`mlflow-artifacts:/` scheme routes through `MLFLOW_TRACKING_URI`)
 
 ---
 
@@ -243,9 +258,7 @@ main        ← protected, CI required, tagged releases only
         └── feature/dayN-slug   ← daily work branches
 ```
 
-Branch naming: `feature/day2-feature-pipeline`, `hotfix/mlflow-psycopg2`
-
-Commit convention: `feat(day2): add KNN imputer for numerical columns`
+Commit convention: `feat(day3): add Optuna tuning with MLflow nested runs`
 
 ---
 
@@ -255,8 +268,8 @@ Commit convention: `feat(day2): add KNN imputer for numerical columns`
 | --- | -------------------------------------------- | ------ |
 | 1   | Repo restructure + Docker Compose + Makefile | ✅ Done |
 | 2   | Feature engineering pipeline                 | ✅ Done |
-| 3   | Model training + MLflow + Optuna             | ⬜ Next |
-| 4   | SHAP explainability                          | ⬜      |
+| 3   | Model training + MLflow + Optuna             | ✅ Done |
+| 4   | SHAP explainability                          | ⬜ Next |
 | 5   | FastAPI REST API + tests                     | ⬜      |
 | 6   | Streamlit dashboard                          | ⬜      |
 | 7   | CI + README + v1.0 release                   | ⬜      |
