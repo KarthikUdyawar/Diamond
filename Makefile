@@ -94,12 +94,16 @@ ps: ## Show running service status
 # =============================================================================
 
 .PHONY: features
-features: ## Run feature engineering pipeline → data/processed/
-	$(COMPOSE) run --rm api uv run python -m src.features
+features: ## Run feature engineering pipeline (local env)
+	uv run --env-file .env.local -m src.features
 
 .PHONY: train
-train: ## Run full training pipeline (features → train → log to MLflow)
-	$(COMPOSE) run --rm api uv run python -m src.train
+train: ## Run full training pipeline inside Docker api container (staging env)
+	$(COMPOSE) run --rm api uv run --env-file .env.staging python -m src.train
+
+.PHONY: train-local
+train-local: ## Run training pipeline locally without Docker (requires make up-infra)
+	uv run --env-file .env.local -m src.train
 
 # =============================================================================
 # Open in browser
@@ -126,13 +130,13 @@ api-docs: ## Open FastAPI Swagger docs in browser
 
 .PHONY: lint
 lint: ## Run ruff (linter) + mypy (type checker)
-	uv run ruff check src/ api/ ui/
-	uv run mypy src/ api/ ui/
+	uv run ruff check src/ ui/
+	uv run mypy src/ ui/
 
 .PHONY: format
 format: ## Auto-format and fix code with ruff
-	uv run ruff format src/ api/ ui/
-	uv run ruff check --fix src/ api/ ui/
+	uv run ruff format src/ ui/
+	uv run ruff check --fix src/ ui/
 
 .PHONY: pre-commit
 pre-commit: ## Run pre-commit hooks on all files
@@ -144,15 +148,18 @@ pre-commit: ## Run pre-commit hooks on all files
 
 .PHONY: test
 test: ## Run pytest with coverage report (≥80% required)
-	uv run pytest api/tests/ src/tests/ \
-		--cov=api --cov=src \
+	uv run --env-file .env.testing pytest src/tests/ \
+		--cov=src \
 		--cov-report=term-missing \
 		--cov-fail-under=80 \
 		-v
 
 .PHONY: test-api
-test-api: ## Run API tests only
-	uv run pytest api/tests/ --cov=api --cov-report=term-missing -v
+test-api: ## Run API tests only (src/tests/api/)
+	uv run --env-file .env.testing pytest src/tests/api/ \
+		--cov=src/api \
+		--cov-report=term-missing \
+		-v
 
 # =============================================================================
 # Cleanup

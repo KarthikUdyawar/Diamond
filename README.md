@@ -16,7 +16,7 @@ Diamond trains a **CatBoost regression model** on ~6,300 natural diamond records
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                        docker-compose                        │
 │                                                             │
@@ -30,15 +30,16 @@ Diamond trains a **CatBoost regression model** on ~6,300 natural diamond records
 │                    artifacts)     registry                  │
 └─────────────────────────────────────────────────────────────┘
 
-ML Pipeline (runs via make train or uv run -m src.train):
+ML Pipeline (runs via make train or uv run --env-file .env.local -m src.train):
 
   data/raw/              src/features.py       src/train.py
   Diamonds/              _merge_raw_csvs() ──▶  CatBoost + 3
   Diamonds2/             ColumnTransformer      baseline models
   (15 per-shape CSVs)    KNN impute        ──▶  Optuna 50 trials
                          Ordinal encode    ──▶  MLflow logging
-                         OHE Shape         ──▶  Model Registry
-                         Engineer features      Diamond/Production
+                         OHE Shape         ──▶  SHAP artifacts
+                         Engineer features ──▶  Model Registry
+                                                Diamond/Production
 ```
 
 ---
@@ -62,9 +63,12 @@ ML Pipeline (runs via make train or uv run -m src.train):
 git clone https://github.com/KarthikUdyawar/Diamond.git
 cd Diamond
 
-# 2. Set up environment
-cp .env.example .env
-# Edit .env — fill in KAGGLE_USERNAME and KAGGLE_KEY
+# 2. Set up environment files
+cp .env.example .env.local
+cp .env.example .env.staging
+cp .env.example .env.testing
+cp .env.local .env
+# Edit .env.local — fill in KAGGLE_USERNAME and KAGGLE_KEY
 
 # 3. Install dependencies
 make install-dev
@@ -75,9 +79,9 @@ make download
 # 5. Start infrastructure (postgres + mlflow)
 make up-infra
 
-# 6. Run feature engineering + training
+# 6. Run feature engineering + training (local env)
 make features
-make train
+make train-local
 
 # 7. Start full stack
 make up
@@ -88,51 +92,87 @@ make ui
 
 ---
 
+## Environments
+
+Three env files control behaviour across contexts. All are gitignored — only `.env.example` is committed.
+
+| File           | `APP_ENV` | Log format        | MLflow URI       | Use               |
+| -------------- | --------- | ----------------- | ---------------- | ----------------- |
+| `.env.local`   | `local`   | Pretty (coloured) | `localhost:5000` | Local development |
+| `.env.testing` | `testing` | Plain (no colour) | `localhost:5000` | pytest / CI       |
+| `.env.staging` | `staging` | JSON              | `mlflow:5000`    | Docker Compose    |
+
+`.env` is kept as an alias for `.env.local` for tools that expect a plain `.env`.
+
+**Switching:**
+
+```bash
+uv run --env-file .env.local    -m src.features   # local
+uv run --env-file .env.testing  -m pytest          # tests
+# Docker Compose picks up .env.staging automatically via env_file:
+```
+
+---
+
 ## Make Targets
 
-```
+```text
 make help          Show all targets
 make install       Install all dependencies with uv
 make install-dev   Install deps + pre-commit hooks
-make env           Copy .env.example → .env
+make env           Copy .env.example → .env (safe, won't overwrite)
 make download      Download raw dataset from Kaggle
-make up            Start all 4 services
+
+make up            Start all 4 services (staging env)
 make up-infra      Start postgres + mlflow only
 make down          Stop all services
-make features      Run feature engineering pipeline
-make train         Run full training pipeline
-make test          Run pytest with coverage report
+
+make features      Run feature engineering pipeline (local env)
+make train         Run training pipeline in Docker container (staging env)
+make train-local   Run training pipeline locally (local env, needs make up-infra)
+
+make test          Run pytest with coverage report (testing env, ≥ 80% required)
+make test-api      Run API tests only (src/tests/api/)
 make lint          Run ruff + mypy
 make format        Auto-format with ruff
+
 make mlflow        Open MLflow UI in browser
 make ui            Open Streamlit dashboard in browser
 make api-docs      Open FastAPI Swagger docs in browser
-make clean         Remove containers, volumes, mlruns/
+
+make clean         Remove containers, volumes, mlruns/ ⚠️ destroys all data
 make clean-cache   Remove Python/tool caches
-make reset-mlflow  Wipe MLflow DB and artifacts, then run make up-infra before re-training from scratch
+make reset-mlflow  Wipe MLflow DB and artifacts
 ```
 
 ---
 
 ## Project Structure
 
-```
+```text
 Diamond/
-├── src/                    # ML pipeline
-│   ├── constants.py        # Column names, category orders, abbreviation maps, paths
+├── src/                    # ML pipeline + API
+│   ├── api/                # FastAPI REST API (Day 5)
+│   │   ├── __init__.py
+│   │   ├── main.py
+│   │   ├── schemas.py
+│   │   ├── routes/         # predict · explain · health
+│   │   └── services/       # model · shap
+│   ├── tests/
+│   │   ├── api/            # API tests (Day 5)
+│   │   ├── test_config.py
+│   │   ├── test_logger.py
+│   │   ├── test_explain.py
+│   │   ├── test_features.py
+│   │   └── test_train.py
+│   ├── config.py           # Pydantic BaseSettings, get_settings() ✅
+│   ├── logger.py           # structlog setup, get_logger() ✅
+│   ├── explain.py          # SHAP ExplainerService ✅
+│   ├── constants.py        # Column names, category orders, paths
 │   ├── features.py         # Feature engineering pipeline ✅
-│   ├── train.py            # Model training + MLflow logging ✅
-│   ├── explain.py          # SHAP explainability (Day 4)
-│   └── tests/
-│       ├── test_features.py
-│       └── test_train.py
-├── api/                    # FastAPI REST API (Day 5)
-│   ├── main.py
-│   ├── schemas.py
-│   ├── routes/             # predict · explain · health
-│   ├── services/           # model · shap
-│   ├── Dockerfile
-│   └── tests/
+│   └── train.py            # Model training + MLflow logging ✅
+├── dockerfiles/
+│   └── api.Dockerfile      # FastAPI service image
 ├── ui/                     # Streamlit dashboard (Day 6)
 │   ├── app.py
 │   ├── api_client.py
@@ -147,7 +187,11 @@ Diamond/
 ├── docker-compose.yml
 ├── pyproject.toml
 ├── Makefile
-└── .env.example
+├── .env                    # Alias for .env.local (gitignored)
+├── .env.local              # Local development (gitignored)
+├── .env.testing            # pytest / CI (gitignored)
+├── .env.staging            # Docker Compose (gitignored)
+└── .env.example            # Annotated template (committed)
 ```
 
 ---
@@ -189,6 +233,14 @@ Diamond/
 | gbm-baseline      | 0.9661         |
 | catboost-tuned    | best           |
 
+**SHAP artifacts** (logged on tuned model only):
+
+| Artifact                          | Description                                          |
+| --------------------------------- | ---------------------------------------------------- |
+| `shap/shap_summary.png`           | Beeswarm — global feature impact distribution        |
+| `shap/shap_dependence_weight.png` | SHAP vs Weight scatter with colour-coded interaction |
+| `shap/shap_importance.png`        | Mean \|SHAP\| bar chart — ranked feature importance  |
+
 ---
 
 ## API Reference
@@ -214,6 +266,7 @@ curl -X POST http://localhost:8000/predict \
 ```
 
 **Response:**
+
 ```json
 {
   "predicted_price_usd": 3842.0,
@@ -240,39 +293,40 @@ Same request body as `/predict`. Returns SHAP values and a base64 waterfall plot
 ```bash
 make lint          # ruff + mypy
 make format        # auto-format
-make test          # pytest with coverage
+make test          # pytest with coverage (testing env)
 make pre-commit    # run pre-commit hooks on all files
 ```
 
 **Note on running locally vs Docker:**
-- `make train` runs inside the Docker api container (recommended for production runs)
-- `uv run -m src.train` runs locally and also works — artifacts are uploaded via the MLflow HTTP proxy (`mlflow-artifacts:/` scheme routes through `MLFLOW_TRACKING_URI`)
+
+- `make train` runs inside the Docker api container with `.env.staging` (recommended for production runs)
+- `make train-local` / `uv run --env-file .env.local -m src.train` runs locally — artifacts are uploaded via the MLflow HTTP proxy (`mlflow-artifacts:/` scheme routes through `MLFLOW_TRACKING_URI`)
 
 ---
 
 ## Git Flow
 
-```
+```text
 main        ← protected, CI required, tagged releases only
   └── develop   ← integration branch
         └── feature/dayN-slug   ← daily work branches
 ```
 
-Commit convention: `feat(day3): add Optuna tuning with MLflow nested runs`
+Commit convention: `feat(day4): add SHAP explainability and structlog logging`
 
 ---
 
 ## Progress
 
-| Day | Area                                         | Status |
-| --- | -------------------------------------------- | ------ |
-| 1   | Repo restructure + Docker Compose + Makefile | ✅ Done |
-| 2   | Feature engineering pipeline                 | ✅ Done |
-| 3   | Model training + MLflow + Optuna             | ✅ Done |
-| 4   | SHAP explainability                          | ⬜ Next |
-| 5   | FastAPI REST API + tests                     | ⬜      |
-| 6   | Streamlit dashboard                          | ⬜      |
-| 7   | CI + README + v1.0 release                   | ⬜      |
+| Day | Area                                                     | Status |
+| --- | -------------------------------------------------------- | ------ |
+| 1   | Repo restructure + Docker Compose + Makefile             | ✅ Done |
+| 2   | Feature engineering pipeline                             | ✅ Done |
+| 3   | Model training + MLflow + Optuna                         | ✅ Done |
+| 4   | SHAP explainability + logging + config + api/ → src/api/ | ✅ Done |
+| 5   | FastAPI REST API + tests                                 | ⬜ Next |
+| 6   | Streamlit dashboard                                      | ⬜      |
+| 7   | CI + README + v1.0 release                               | ⬜      |
 
 ---
 

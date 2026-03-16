@@ -33,11 +33,13 @@ Diamond's UI is built around **three types of users in a single person** — the
 **Context:** Running the stack locally after cloning the repo. Wants to demonstrate the end-to-end system to a recruiter or use it to evaluate a model upgrade.
 
 **Goals:**
+
 - Quickly verify that predictions look reasonable
 - Show a recruiter how SHAP explainability works in practice
 - Compare model runs without opening the MLflow UI directly
 
 **Frustrations to avoid:**
+
 - Having to restart a service to swap models
 - Waiting more than 2 seconds for any interaction
 - A dashboard that looks like a default Streamlit template
@@ -47,11 +49,13 @@ Diamond's UI is built around **three types of users in a single person** — the
 **Context:** Landed on the README, clicked a demo link or screenshot. Has no ML background.
 
 **Goals:**
+
 - Understand what the tool does within 10 seconds
 - Try a prediction with default values immediately
 - Read the explanation in plain English
 
 **Frustrations to avoid:**
+
 - Walls of technical jargon
 - No default values pre-filled
 - Explanation charts with no labels
@@ -60,7 +64,7 @@ Diamond's UI is built around **three types of users in a single person** — the
 
 ## 3. Information Architecture
 
-```
+```text
 Diamond Dashboard
 │
 ├── Tab 1 — Price Predictor          ← default landing tab
@@ -102,7 +106,7 @@ Diamond Dashboard
 
 #### Layout
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  💎 Diamond Price Predictor          [Tab 1] [Tab 2] [Tab 3]    │
 ├──────────────────────────┬──────────────────────────────────────┤
@@ -163,9 +167,9 @@ Diamond Dashboard
 
 **Purpose:** Deep-dive into *why* a diamond got its price. Designed for the ML-curious user and for portfolio demonstrations.
 
-#### Layout
+#### Primary Dashboard Layout
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  💎 Diamond Price Predictor          [Tab 1] [Tab 2] [Tab 3]    │
 ├─────────────────────────────────────────────────────────────────┤
@@ -202,7 +206,7 @@ Diamond Dashboard
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-#### UX Decisions
+#### Logic Layer UX Decisions
 
 **Input sync:** The inputs from Tab 1 are shared state. Switching to Tab 2 uses the same values — no need to re-enter anything. A summary line at the top ("Explaining: 0.89ct · Premium · H · SI2") confirms what is being explained.
 
@@ -220,9 +224,9 @@ Diamond Dashboard
 
 **Purpose:** Give the developer a view of the ML experiment landscape — which models were trained, how they compare, and which one is currently serving.
 
-#### Layout
+#### Secondary View Layout
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │  💎 Diamond Price Predictor          [Tab 1] [Tab 2] [Tab 3]    │
 ├─────────────────────────────────────────────────────────────────┤
@@ -257,7 +261,7 @@ Diamond Dashboard
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-#### UX Decisions
+#### Data Flow UX Decisions
 
 **Active model card:** Always at the top, prominent. Answers the most critical question first: *what is currently serving?* Uses a trophy emoji and a highlighted border to distinguish it clearly from archived runs.
 
@@ -294,7 +298,7 @@ Diamond Dashboard
 
 The dashboard has three pieces of shared state:
 
-```
+```text
 AppState
 ├── inputs: DiamondInputs          # Shared across Tab 1 and Tab 2
 │   ├── carat: float
@@ -326,7 +330,7 @@ In Streamlit, this maps to `st.session_state`. The `inputs` dict is initialized 
 | Colour contrast      | All text meets WCAG AA (4.5:1 minimum). SHAP colours use teal/coral, not red/green |
 | Keyboard navigation  | All inputs are tab-navigable. Dropdowns support arrow key selection                |
 | Screen reader labels | Every slider and dropdown has an `aria-label`. Charts have text alt descriptions   |
-| Error messages       | Never rely on colour alone — use icons (⚠️) and text                                |
+| Error messages       | Never rely on colour alone — use icons (⚠️) and text                               |
 | Font size            | Minimum 14px for body text. Price hero number is 40px+                             |
 
 ---
@@ -334,9 +338,11 @@ In Streamlit, this maps to `st.session_state`. The `inputs` dict is initialized 
 ## 8. Tone & Copy Guidelines
 
 ### Voice
+
 Direct, calm, and numerically grounded. Never say "amazing" or "incredible". Treat the user as a data-literate adult.
 
 ### Number formatting
+
 - Prices: `$3,842` (not `$3842.00`, not `3842`)
 - Percentages: `98.4%` (not `0.984`)
 - SHAP values: always show sign (`+$1,243` / `-$122`)
@@ -344,7 +350,7 @@ Direct, calm, and numerically grounded. Never say "amazing" or "incredible". Tre
 
 ### Explanation sentence templates
 
-```
+```text
 # High carat
 "This diamond's high carat weight ({carat}ct) is the primary driver of its price,
 contributing an estimated +${shap_carat} above the baseline."
@@ -368,6 +374,7 @@ and {cut} cut quality."
 This section guides the aesthetic *intent*, not exact pixel values. The implementer has creative freedom within these guardrails.
 
 ### Mood
+
 **Refined industrial** — like a gemologist's workbench. Clean, precise, slightly dark. Not a consumer app, not a toy. Data is the hero.
 
 ### Colour Palette Guidance
@@ -389,9 +396,11 @@ This section guides the aesthetic *intent*, not exact pixel values. The implemen
 - **Plain-English summaries**: Slightly warmer, readable serif or humanist sans — feels like a written explanation, not a UI label
 
 ### Spacing Principle
+
 Generous. Let each panel breathe. The input panel and output panel should feel like two distinct work surfaces, not a cramped form.
 
 ### What to Avoid
+
 - Default Streamlit theme (grey sidebar, white background, blue buttons)
 - Generic purple-gradient-on-white data science aesthetic
 - Drop shadows on everything

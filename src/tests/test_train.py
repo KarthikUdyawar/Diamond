@@ -12,6 +12,10 @@ or real training required. Tests focus on:
   - pipeline_path and processed_dir propagate end-to-end (regression for
     the bug where internal callers fell back to src.constants.PIPELINE_PATH)
   - run_scope tags are written on every run and used to scope cache hits
+
+Day 4 note: _run_optuna_tuning now calls _log_shap_artifacts internally.
+All tests that invoke _run_optuna_tuning directly patch it out to avoid
+requiring a live model + SHAP explainer.
 """
 
 from __future__ import annotations
@@ -1233,6 +1237,7 @@ class TestTrainAndLogExtended:
 
 # ---------------------------------------------------------------------------
 # _run_optuna_tuning — mocked to avoid real training
+# _log_shap_artifacts is patched in all tests here (Day 4 addition)
 # ---------------------------------------------------------------------------
 
 
@@ -1278,6 +1283,7 @@ class TestRunOptunaTuning:
             ),
             patch("src.train.CatBoostRegressor", return_value=mock_final_model),
             patch("src.train.Path.exists", return_value=False),
+            patch("src.train._log_shap_artifacts"),  # Day 4: SHAP patched out
         ):
             mock_start.return_value.__enter__ = MagicMock(return_value=mock_run)
             mock_start.return_value.__exit__ = MagicMock(return_value=False)
@@ -1325,6 +1331,7 @@ class TestRunOptunaTuning:
             ),
             patch("src.train.CatBoostRegressor", return_value=mock_final_model),
             patch("src.train.Path.exists", return_value=True),
+            patch("src.train._log_shap_artifacts"),  # Day 4: SHAP patched out
         ):
             mock_start.return_value.__enter__ = MagicMock(return_value=mock_run)
             mock_start.return_value.__exit__ = MagicMock(return_value=False)
@@ -1373,6 +1380,7 @@ class TestRunOptunaTuning:
             ),
             patch("src.train.CatBoostRegressor", return_value=mock_final_model),
             patch("src.train.Path.exists", return_value=False),
+            patch("src.train._log_shap_artifacts"),  # Day 4: SHAP patched out
         ):
             mock_start.return_value.__enter__ = MagicMock(return_value=mock_run)
             mock_start.return_value.__exit__ = MagicMock(return_value=False)
@@ -1417,6 +1425,7 @@ class TestRunOptunaTuning:
             ),
             patch("src.train.CatBoostRegressor", return_value=mock_final_model),
             patch("src.train.Path.exists", return_value=False),
+            patch("src.train._log_shap_artifacts"),  # Day 4: SHAP patched out
         ):
             mock_start.return_value.__enter__ = MagicMock(return_value=mock_run)
             mock_start.return_value.__exit__ = MagicMock(return_value=False)
@@ -1434,6 +1443,50 @@ class TestRunOptunaTuning:
         all_args, all_kwargs = study.optimize.call_args
         n_trials_used = all_kwargs.get("n_trials") or (all_args[1] if len(all_args) > 1 else None)
         assert n_trials_used == 7
+
+    def test_shap_artifacts_called_for_tuned_model(self) -> None:
+        """_log_shap_artifacts must be called exactly once inside the tuning run."""
+        from src.train import _run_optuna_tuning
+
+        mock_run = MagicMock()
+        mock_run.info.run_id = "r"
+        study = self._make_study()
+        mock_final_model = MagicMock()
+        mock_final_model.predict.return_value = np.ones(5)
+
+        with (
+            patch("src.train.optuna.logging.set_verbosity"),
+            patch("src.train.MLflowCallback"),
+            patch("src.train.optuna.create_study", return_value=study),
+            patch("src.train.mlflow.start_run") as mock_start,
+            patch("src.train.mlflow.log_params"),
+            patch("src.train.mlflow.log_metrics"),
+            patch("src.train.mlflow.sklearn.log_model"),
+            patch("src.train.mlflow.log_artifact"),
+            patch("src.train.mlflow.set_tag"),
+            patch("src.train.infer_signature"),
+            patch(
+                "src.train.mlflow.get_tracking_uri",
+                return_value="http://localhost:5000",
+            ),
+            patch("src.train.CatBoostRegressor", return_value=mock_final_model),
+            patch("src.train.Path.exists", return_value=False),
+            patch("src.train._log_shap_artifacts") as mock_shap,
+        ):
+            mock_start.return_value.__enter__ = MagicMock(return_value=mock_run)
+            mock_start.return_value.__exit__ = MagicMock(return_value=False)
+
+            _run_optuna_tuning(
+                "exp_1",
+                np.ones((10, 4)),
+                np.ones((5, 4)),
+                np.ones(10),
+                np.ones(5),
+                ["f1", "f2", "f3", "f4"],
+                n_trials=2,
+            )
+
+        mock_shap.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

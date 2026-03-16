@@ -26,6 +26,23 @@ repos:
           - --pattern=release/.*
 
   # ────────────────────────────────────────────────
+  # YAML & Markdown formatting
+  # ────────────────────────────────────────────────
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.48.0
+    hooks:
+      - id: markdownlint
+        name: MarkdownLint (lint + fix)
+        files: \.md$
+        args: [--fix, --config=.markdownlint.yaml]
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: [-c=.yamllint.yaml]
+
+  # ────────────────────────────────────────────────
   # Python formatting & import sorting & autofixes
   # ────────────────────────────────────────────────
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -48,7 +65,7 @@ repos:
     rev: 1.9.4
     hooks:
       - id: bandit
-        args: [--format=screen, --quiet, -s=B101,B113]
+        args: [--format=screen, --quiet, -s=B101, B113]
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.0
@@ -64,7 +81,13 @@ repos:
       - id: mypy
         files: \.pyi?$
         exclude: ^tests/
-        args: [--strict, --ignore-missing-imports, --explicit-package-bases]
+        args:
+          [
+            --strict,
+            --ignore-missing-imports,
+            --explicit-package-bases,
+            --disable-error-code=untyped-decorator,
+          ]
         additional_dependencies:
           - fastapi
           - sqlalchemy[mypy]
@@ -72,3 +95,4 @@ repos:
           - pydantic-settings
           - pandas-stubs
           - types-requests
+          - numpy

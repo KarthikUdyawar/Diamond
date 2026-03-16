@@ -303,6 +303,7 @@ dependencies = [
     { name = "joblib" },
     { name = "kaggle" },
     { name = "lightgbm" },
+    { name = "matplotlib" },
     { name = "mlflow" },
     { name = "numpy" },
     { name = "optuna" },
@@ -313,12 +314,14 @@ dependencies = [
     { name = "psycopg2-binary" },
     { name = "pyarrow" },
     { name = "pydantic" },
+    { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "scikit-learn" },
     { name = "shap" },
     { name = "sqlalchemy" },
     { name = "streamlit" },
+    { name = "structlog" },
     { name = "uvicorn" },
     { name = "xgboost" },
 ]
@@ -329,7 +332,6 @@ dev = [
     { name = "mypy" },
     { name = "pandas-stubs" },
     { name = "pre-commit" },
-    { name = "pydantic-settings" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -346,6 +348,7 @@ requires-dist = [
     { name = "joblib", specifier = "==1.4.2" },
     { name = "kaggle", specifier = "==1.6.14" },
     { name = "lightgbm", specifier = "==4.3.0" },
+    { name = "matplotlib", specifier = ">=3.8.0" },
     { name = "mlflow", specifier = "==2.13.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = "==1.19.1" },
     { name = "numpy", specifier = "==1.26.4" },
@@ -359,7 +362,7 @@ requires-dist = [
     { name = "psycopg2-binary", specifier = "==2.9.9" },
     { name = "pyarrow", specifier = "==15.0.2" },
     { name = "pydantic", specifier = "==2.7.1" },
-    { name = "pydantic-settings", marker = "extra == 'dev'", specifier = "==2.3.4" },
+    { name = "pydantic-settings", specifier = ">=2.3.4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==8.2.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = "==5.0.0" },
     { name = "python-dotenv", specifier = "==1.0.1" },
@@ -370,6 +373,7 @@ requires-dist = [
     { name = "shap", specifier = "==0.45.0" },
     { name = "sqlalchemy", specifier = "==2.0.30" },
     { name = "streamlit", specifier = "==1.35.0" },
+    { name = "structlog", specifier = ">=24.1.0" },
     { name = "types-requests", marker = "extra == 'dev'", specifier = "==2.32.0.20240602" },
     { name = "uvicorn", specifier = "==0.29.0" },
     { name = "xgboost", specifier = "==2.0.3" },
@@ -1882,6 +1886,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b7/53/2ce85f9530a0ab9445b74513339e235feeb642bbbab3a810f84ff210e382/streamlit-1.35.0.tar.gz", hash = "sha256:679d55bb6189743f606abf0696623df0bfd223a6d0c8d96b8d60678d4891d2d6", size = 8214667, upload-time = "2024-05-23T17:12:52.54Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0e/86/69fdac2ec6852304bda08e5af5b72dfa6e74dc0b3cef0d7c1e19994388ae/streamlit-1.35.0-py2.py3-none-any.whl", hash = "sha256:e17d1d86830a0d7687c37faf2fe47bffa752d0c95a306e96d7749bd3faa72a5b", size = 8581406, upload-time = "2024-05-23T17:12:48.909Z" },
+]
+
+[[package]]
+name = "structlog"
+version = "25.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ef/52/9ba0f43b686e7f3ddfeaa78ac3af750292662284b3661e91ad5494f21dbc/structlog-25.5.0.tar.gz", hash = "sha256:098522a3bebed9153d4570c6d0288abf80a031dfdb2048d59a49e9dc2190fc98", size = 1460830, upload-time = "2025-10-27T08:28:23.028Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a8/45/a132b9074aa18e799b891b91ad72133c98d8042c70f6240e4c5f9dabee2f/structlog-25.5.0-py3-none-any.whl", hash = "sha256:a8453e9b9e636ec59bd9e79bbd4a72f025981b3ba0f5837aebf48f02f37a7f9f", size = 72510, upload-time = "2025-10-27T08:28:21.535Z" },
 ]
 
 [[package]]
