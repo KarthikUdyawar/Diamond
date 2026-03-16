@@ -10,8 +10,6 @@ Public API:
 from __future__ import annotations
 
 import json
-import logging
-import os
 import tempfile
 import time
 from pathlib import Path
@@ -23,7 +21,6 @@ import numpy as np
 import optuna
 import pandas as pd
 from catboost import CatBoostRegressor
-from dotenv import load_dotenv
 from lightgbm import LGBMRegressor
 from mlflow.models import infer_signature
 from optuna_integration.mlflow import MLflowCallback
@@ -33,8 +30,8 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 from xgboost import XGBRegressor
 
+from src.config import get_settings
 from src.constants import (
-    MLFLOW_EXPERIMENT_NAME,
     MLFLOW_MODEL_NAME,
     MLFLOW_MODEL_STAGE,
     N_FEATURES_TO_SELECT,
@@ -60,9 +57,11 @@ from src.constants import (
     TEST_PARQUET_PATH,
     TRAIN_PARQUET_PATH,
 )
+from src.explain import ExplainerService, init_explainer
 from src.features import load_pipeline
+from src.logger import bind_context, clear_context, get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Metric helpers
@@ -76,12 +75,12 @@ def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
     mae = float(mean_absolute_error(y_true, y_pred))
     r2 = float(r2_score(y_true, y_pred))
-    # MAPE — guard against near-zero actuals
     mask = np.abs(y_true) > 1e-6
     if np.any(mask):
         mape = float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
     else:
         mape = 0.0
+    logger.debug("metrics_computed", rmse=rmse, mae=mae, r2=r2, mape=mape)
     return {"rmse": rmse, "mae": mae, "r2": r2, "mape": mape}
 
 
@@ -94,10 +93,7 @@ def _get_or_create_experiment(name: str) -> str:
     """
     Return experiment ID, creating the experiment if it doesn't exist.
 
-    Artifacts are proxied via the MLflow server (--serve-artifacts), so no
-    local artifact_root is needed. If a soft-deleted experiment with the same
-    name exists it is restored (Postgres unique-name constraint prevents
-    re-creation). Run `make reset-mlflow` to fully wipe the DB and start clean.
+    Restores soft-deleted experiments transparently.
     """
     client = mlflow.MlflowClient()
     experiment = mlflow.get_experiment_by_name(name)
@@ -105,13 +101,13 @@ def _get_or_create_experiment(name: str) -> str:
     if experiment is not None:
         exp_id = experiment.experiment_id
         if experiment.lifecycle_stage == "deleted":
-            logger.warning("Experiment '%s' was deleted — restoring it.", name)
+            logger.warning("experiment_was_deleted_restoring", name=name)
             client.restore_experiment(exp_id)
-        logger.info("Using existing MLflow experiment '%s' (id=%s).", name, exp_id)
+        logger.info("experiment_found", name=name, experiment_id=exp_id)
         return str(exp_id)
 
     experiment_id = mlflow.create_experiment(name)
-    logger.info("Created MLflow experiment '%s' (id=%s).", name, experiment_id)
+    logger.info("experiment_created", name=name, experiment_id=experiment_id)
     return str(experiment_id)
 
 
@@ -124,17 +120,12 @@ def _run_exists(
     Return True if a matching run already exists in *experiment_id*.
 
     Matching is keyed by *run_name* plus optional *run_scope* tags.
-    Passing *run_scope* prevents stale runs created with a different
-    processed_dir or pipeline_path from being treated as a cache hit.
-
-    Tag keys that contain dots are backtick-quoted to comply with the MLflow
-    search filter string grammar.
+    Tag keys containing dots are backtick-quoted for MLflow search grammar.
     """
     client = mlflow.MlflowClient()
     filters = [f"tags.mlflow.runName = '{run_name}'"]
     if run_scope:
         for k, v in run_scope.items():
-            # Backtick-quote keys containing dots (MLflow search grammar).
             safe_key = f"`{k}`" if "." in k else k
             filters.append(f"tags.{safe_key} = '{v}'")
     runs = client.search_runs(
@@ -142,7 +133,10 @@ def _run_exists(
         filter_string=" and ".join(filters),
         max_results=1,
     )
-    return len(runs) > 0
+    exists = len(runs) > 0
+    if exists:
+        logger.info("run_skipped_already_exists", run_name=run_name)
+    return exists
 
 
 def _log_common_tags(
@@ -170,23 +164,14 @@ def _load_data(
     Load processed parquet files from *processed_dir* and apply the fitted
     pipeline at *pipeline_path*.
 
-    Parquet paths are derived from *processed_dir* so that callers who pass a
-    custom directory actually get data from that directory (previously the paths
-    were hardcoded to the constants, making the *processed_dir* argument a
-    no-op).
-
     Returns
     -------
     X_train_t, X_test_t : np.ndarray
-        Transformed feature matrices.
     y_train, y_test : np.ndarray
-        Log-price target vectors.
     feature_names : list[str]
-        Output feature names from the ColumnTransformer.
     """
     from src.constants import LOG_PRICE_COL
 
-    # Derive parquet paths from processed_dir so the argument is honoured.
     processed = Path(processed_dir)
     train_path = str(processed / Path(TRAIN_PARQUET_PATH).name)
     test_path = str(processed / Path(TEST_PARQUET_PATH).name)
@@ -206,13 +191,12 @@ def _load_data(
     X_train_t = preprocessor.transform(X_train)
     X_test_t = preprocessor.transform(X_test)
 
-    # Derive output feature names
     feature_names = _get_feature_names(preprocessor)
     logger.info(
-        "Data loaded — train: %s, test: %s, features: %d.",
-        X_train_t.shape,
-        X_test_t.shape,
-        len(feature_names),
+        "data_loaded",
+        train_shape=X_train_t.shape,
+        test_shape=X_test_t.shape,
+        n_features=len(feature_names),
     )
     return X_train_t, X_test_t, y_train, y_test, feature_names
 
@@ -262,7 +246,11 @@ def _select_features(
     ranked = np.argsort(importances)[::-1]
     selected_indices = sorted(ranked[:n_features].tolist())
     selected_names = [feature_names[i] for i in selected_indices]
-    logger.info("Selected %d features: %s", n_features, selected_names)
+    logger.info(
+        "feature_selection_done",
+        n_selected=n_features,
+        selected=selected_names,
+    )
     return selected_indices, selected_names
 
 
@@ -287,26 +275,13 @@ def _train_and_log(
 ) -> tuple[str, float]:
     """
     Train *model*, log everything to MLflow, return (run_id, rmse).
-
-    Parameters
-    ----------
-    extra_params:
-        Additional params to log beyond what the model exposes (e.g. Optuna
-        best params that aren't in model.get_params()).
-    pipeline_path:
-        Path to the fitted pipeline joblib to attach as an MLflow artifact.
-        Callers should always pass this explicitly so the logged artifact
-        matches the pipeline that actually produced the features for this run.
-    run_scope:
-        Provenance tags written onto every run and used by _run_exists() to
-        scope cache hits. Ensures runs produced from a different processed_dir
-        or pipeline_path are never treated as equivalent.
     """
+    bind_context(run_name=run_name, model_type=model_type)
+    logger.info("training_started", run_name=run_name)
+
     with mlflow.start_run(run_name=run_name, experiment_id=experiment_id) as run:
-        # Log common + provenance tags first so they're always present.
         _log_common_tags(model_type, run_scope=run_scope)
 
-        # Log hyperparameters
         params = model.get_params() if hasattr(model, "get_params") else {}
         if extra_params:
             params.update(extra_params)
@@ -315,40 +290,38 @@ def _train_and_log(
         params["test_size"] = len(X_test)
         mlflow.log_params({str(k): str(v) for k, v in params.items()})
 
-        # Train
         t0 = time.perf_counter()
         model.fit(X_train, y_train)
         training_time = time.perf_counter() - t0
 
-        # Evaluate
         y_pred = model.predict(X_test)
         metrics = _compute_metrics(y_test, y_pred)
         metrics["training_time_sec"] = round(training_time, 3)
         mlflow.log_metrics(metrics)
 
-        # Log model artifact with signature
         signature = infer_signature(X_train, model.predict(X_train))
         mlflow.sklearn.log_model(model, "model", signature=signature)
 
-        # Log pipeline artifact — uses the caller-supplied path, never the global
         if Path(pipeline_path).exists():
             mlflow.log_artifact(pipeline_path, artifact_path="pipeline")
 
-        # Log selected feature names
         with tempfile.TemporaryDirectory() as tmpdir:
             features_path = Path(tmpdir) / "selected_features.json"
             features_path.write_text(json.dumps(selected_names, indent=2), encoding="utf-8")
             mlflow.log_artifact(str(features_path))
 
         run_id = run.info.run_id
-        logger.info(
-            "Run '%s' complete — RMSE=%.4f  R²=%.4f  time=%.1fs",
-            run_name,
-            metrics["rmse"],
-            metrics["r2"],
-            training_time,
-        )
-        return run_id, metrics["rmse"]
+
+    logger.info(
+        "training_done",
+        run_name=run_name,
+        run_id=run_id,
+        rmse=metrics["rmse"],
+        r2=metrics["r2"],
+        elapsed_sec=round(training_time, 2),
+    )
+    clear_context()
+    return run_id, metrics["rmse"]
 
 
 def _train_catboost_baseline(
@@ -484,8 +457,43 @@ def _train_gbm_baseline(
 
 
 # ---------------------------------------------------------------------------
-# Optuna tuning
+# Optuna tuning + SHAP
 # ---------------------------------------------------------------------------
+
+
+def _log_shap_artifacts(
+    final_model: CatBoostRegressor,
+    X_train: np.ndarray,
+    selected_names: list[str],
+) -> ExplainerService:
+    """
+    Build ExplainerService and log global SHAP plots as MLflow artifacts.
+
+    Must be called inside an active mlflow.start_run() context.
+    Only called for the tuned model (best model only — per plan decision Q4).
+
+    Returns the initialised ExplainerService so it is available for the API.
+    """
+    X_train_df = pd.DataFrame(X_train, columns=selected_names)
+
+    explainer = init_explainer(final_model, X_train_df, selected_names)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        logger.info("shap_artifacts_generating", output_dir=tmpdir)
+
+        summary_path = explainer.plot_summary(X_train_df, output_dir=tmp_path)
+        dependence_path = explainer.plot_dependence(
+            X_train_df, feature="Weight", output_dir=tmp_path
+        )
+        importance_path = explainer.plot_importance(X_train_df, output_dir=tmp_path)
+
+        mlflow.log_artifact(str(summary_path), artifact_path="shap")
+        mlflow.log_artifact(str(dependence_path), artifact_path="shap")
+        mlflow.log_artifact(str(importance_path), artifact_path="shap")
+
+    logger.info("shap_artifacts_logged")
+    return explainer
 
 
 def _run_optuna_tuning(
@@ -501,22 +509,8 @@ def _run_optuna_tuning(
 ) -> tuple[str, float]:
     """
     Run Optuna HPO on CatBoost, each trial logged as a nested MLflow run.
-    Re-trains the final model with best params and logs as *catboost-tuned*.
-
-    Parameters
-    ----------
-    pipeline_path:
-        Path to the fitted pipeline joblib to attach as an MLflow artifact.
-        Forwarded from run_training() so the logged artifact always matches
-        the pipeline that produced the features for this run.
-    run_scope:
-        Provenance tags written onto the parent run and used by _run_exists()
-        to scope cache hits.
-
-    Returns
-    -------
-    run_id : str
-    rmse : float
+    Re-trains the final model with best params, logs SHAP artifacts, and
+    returns (run_id, rmse).
     """
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -526,9 +520,6 @@ def _run_optuna_tuning(
         mlflow_kwargs={"experiment_id": experiment_id, "nested": True},
     )
 
-    # Carve a fixed validation split out of the training data.
-    # X_test / y_test remain completely untouched until the final one-time
-    # evaluation of the best model after HPO is complete.
     X_tr, X_val, y_tr, y_val = train_test_split(
         X_train, y_train, test_size=0.2, random_state=RANDOM_STATE
     )
@@ -547,21 +538,17 @@ def _run_optuna_tuning(
                 "subsample", OPTUNA_CB_SUBSAMPLE_LOW, OPTUNA_CB_SUBSAMPLE_HIGH
             ),
         }
-        model = CatBoostRegressor(
-            **params,
-            random_seed=RANDOM_STATE,
-            verbose=0,
-        )
+        model = CatBoostRegressor(**params, random_seed=RANDOM_STATE, verbose=0)
         model.fit(X_tr, y_tr)
         y_pred = model.predict(X_val)
-        rmse = float(np.sqrt(mean_squared_error(y_val, y_pred)))
-        return rmse
+        return float(np.sqrt(mean_squared_error(y_val, y_pred)))
 
-    # Run study — wrap in a parent run so trials nest under catboost-tuned
+    bind_context(run_name=RUN_NAME_CATBOOST_TUNED)
+    logger.info("optuna_tuning_started", n_trials=n_trials)
+
     with mlflow.start_run(
         run_name=RUN_NAME_CATBOOST_TUNED, experiment_id=experiment_id
     ) as parent_run:
-        # Log common + provenance tags first.
         _log_common_tags("catboost", run_scope=run_scope)
 
         study = optuna.create_study(
@@ -572,20 +559,20 @@ def _run_optuna_tuning(
         study.optimize(objective, n_trials=n_trials, callbacks=[mlflow_cb])
 
         best_params = study.best_params
-        logger.info("Optuna best params: %s", best_params)
-        logger.info("Optuna best RMSE: %.4f", study.best_value)
-
-        # Re-train final model with best params on full training data.
-        final_model = CatBoostRegressor(
-            **best_params,
-            random_seed=RANDOM_STATE,
-            verbose=0,
+        logger.info(
+            "optuna_tuning_done",
+            best_rmse=study.best_value,
+            best_trial=study.best_trial.number,
+            best_params=best_params,
         )
+
+        # Re-train final model on full training data with best params
+        final_model = CatBoostRegressor(**best_params, random_seed=RANDOM_STATE, verbose=0)
         t0 = time.perf_counter()
         final_model.fit(X_train, y_train)
         training_time = time.perf_counter() - t0
 
-        # One-time evaluation on the held-out test set.
+        # One-time evaluation on the held-out test set
         y_pred = final_model.predict(X_test)
         metrics = _compute_metrics(y_test, y_pred)
         metrics["training_time_sec"] = round(training_time, 3)
@@ -601,11 +588,9 @@ def _run_optuna_tuning(
         mlflow.log_params({str(k): str(v) for k, v in all_params.items()})
         mlflow.log_metrics(metrics)
 
-        # Log model artifact with signature
         signature = infer_signature(X_train, final_model.predict(X_train))
         mlflow.sklearn.log_model(final_model, "model", signature=signature)
 
-        # Log pipeline artifact — uses the caller-supplied path, never the global
         if Path(pipeline_path).exists():
             mlflow.log_artifact(pipeline_path, artifact_path="pipeline")
 
@@ -614,15 +599,20 @@ def _run_optuna_tuning(
             features_path.write_text(json.dumps(selected_names, indent=2), encoding="utf-8")
             mlflow.log_artifact(str(features_path))
 
+        # Log SHAP artifacts inside the parent run context (best model only)
+        _log_shap_artifacts(final_model, X_train, selected_names)
+
         run_id = parent_run.info.run_id
-        logger.info(
-            "Tuned run '%s' complete — RMSE=%.4f  R²=%.4f  time=%.1fs",
-            RUN_NAME_CATBOOST_TUNED,
-            metrics["rmse"],
-            metrics["r2"],
-            training_time,
-        )
-        return run_id, metrics["rmse"]
+
+    logger.info(
+        "tuned_run_complete",
+        run_id=run_id,
+        rmse=metrics["rmse"],
+        r2=metrics["r2"],
+        elapsed_sec=round(training_time, 2),
+    )
+    clear_context()
+    return run_id, metrics["rmse"]
 
 
 # ---------------------------------------------------------------------------
@@ -635,13 +625,7 @@ def _is_already_registered(
     model_name: str = MLFLOW_MODEL_NAME,
     stage: str = MLFLOW_MODEL_STAGE,
 ) -> bool:
-    """
-    Return True if a model version in *stage* already points to *run_id*.
-
-    Prevents mlflow.register_model() from creating a duplicate version on
-    every pipeline re-run when all training runs were skipped (idempotency
-    guard for run_training()).
-    """
+    """Return True if a model version in *stage* already points to *run_id*."""
     client = mlflow.MlflowClient()
     try:
         staged = client.get_latest_versions(model_name, stages=[stage])
@@ -649,7 +633,7 @@ def _is_already_registered(
     except mlflow.exceptions.MlflowException as exc:
         error_code = getattr(exc, "error_code", None)
         if error_code == "RESOURCE_DOES_NOT_EXIST" or "RESOURCE_DOES_NOT_EXIST" in str(exc):
-            logger.debug("Model '%s' not yet in registry.", model_name)
+            logger.debug("model_not_yet_in_registry", name=model_name)
             return False
         raise
 
@@ -658,11 +642,7 @@ def _verify_model_loads(model_name: str, stage: str) -> None:
     """Load the registered model from the registry as a smoke test."""
     production_uri = f"models:/{model_name}/{stage}"
     loaded = mlflow.pyfunc.load_model(production_uri)
-    logger.info(
-        "Verified: loaded model from '%s' — type: %s.",
-        production_uri,
-        type(loaded),
-    )
+    logger.info("model_load_verified", uri=production_uri, type=str(type(loaded)))
 
 
 def _register_best_model(
@@ -670,28 +650,22 @@ def _register_best_model(
     model_name: str = MLFLOW_MODEL_NAME,
     stage: str = MLFLOW_MODEL_STAGE,
 ) -> None:
-    """
-    Register the model from *run_id* in the MLflow Model Registry and
-    promote it to *stage*.
-    """
+    """Register the model from *run_id* and promote it to *stage*."""
     client = mlflow.MlflowClient()
     model_uri = f"runs:/{run_id}/model"
 
-    # Register — creates version 1 if model doesn't exist yet
     model_version = mlflow.register_model(model_uri=model_uri, name=model_name)
     version = model_version.version
-    logger.info("Registered model '%s' version %s.", model_name, version)
+    logger.info("model_registered", name=model_name, version=version)
 
-    # Promote to Production
     client.transition_model_version_stage(
         name=model_name,
         version=version,
         stage=stage,
         archive_existing_versions=True,
     )
-    logger.info("Model '%s' v%s promoted to '%s'.", model_name, version, stage)
+    logger.info("model_promoted", name=model_name, version=version, stage=stage)
 
-    # Verify the model loads
     _verify_model_loads(model_name, stage)
 
 
@@ -708,51 +682,39 @@ def run_training(
     """
     Full training orchestrator.
 
-    1. Load transformed train/test data from *processed_dir* using the
-       pipeline at *pipeline_path*.
+    1. Load transformed train/test data from *processed_dir*.
     2. CatBoost-based feature selection → top 14 features.
-    3. Train 4 baselines (skip each if a run with that name already exists
-       AND was produced from the same processed_dir + pipeline_path).
-    4. Run Optuna trials on CatBoost (skip if catboost-tuned already exists
-       for the same inputs + n_trials).
+    3. Train 4 baselines (skip if run already exists with same provenance).
+    4. Run Optuna tuning on CatBoost + log SHAP artifacts.
     5. Register the best run (lowest RMSE) as Diamond/Production.
-
-    All three public parameters are forwarded all the way through to _load_data,
-    every baseline wrapper, and _run_optuna_tuning so that the MLflow artifact
-    logged for each run is always the same pipeline that produced the features.
     """
-    load_dotenv(override=True)
-    tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
-    experiment_name = os.environ.get("MLFLOW_EXPERIMENT_NAME", MLFLOW_EXPERIMENT_NAME)
-    mlflow.set_tracking_uri(tracking_uri)
-    logger.info("MLflow tracking URI: %s", tracking_uri)
+    cfg = get_settings()
+    bind_context(app_env=cfg.app_env, experiment=cfg.mlflow_experiment_name)
+    logger.info("training_pipeline_started", env=cfg.app_env)
 
-    experiment_id = _get_or_create_experiment(experiment_name)
+    mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
+    logger.info("mlflow_tracking_uri_set", uri=cfg.mlflow_tracking_uri)
 
-    # Build provenance scope — resolved absolute paths so relative vs absolute
-    # paths with the same meaning always produce the same tag value.
+    experiment_id = _get_or_create_experiment(cfg.mlflow_experiment_name)
+
     baseline_scope: dict[str, str] = {
         "data.processed_dir": str(Path(processed_dir).resolve()),
         "data.pipeline_path": str(Path(pipeline_path).resolve()),
     }
-    # Tuning runs also encode n_trials so changing the budget forces a re-run.
     tuning_scope: dict[str, str] = {
         **baseline_scope,
         "train.n_trials": str(n_trials),
     }
 
-    # Load data — both processed_dir and pipeline_path are honoured here
     X_train, X_test, y_train, y_test, feature_names = _load_data(
         processed_dir=processed_dir,
         pipeline_path=pipeline_path,
     )
 
-    # Feature selection
     selected_indices, selected_names = _select_features(X_train, y_train, feature_names)
     X_train_sel = X_train[:, selected_indices]
     X_test_sel = X_test[:, selected_indices]
 
-    # Baseline runs — skip only if the same run_name + provenance already exists
     results: dict[str, tuple[str, float]] = {}
 
     baseline_trainers = [
@@ -764,7 +726,6 @@ def run_training(
 
     for run_name, trainer_fn in baseline_trainers:
         if _run_exists(experiment_id, run_name, run_scope=baseline_scope):
-            logger.info("Checking '%s' — run exists, retrieving metrics.", run_name)
             client = mlflow.MlflowClient()
             existing = client.search_runs(
                 experiment_ids=[experiment_id],
@@ -781,9 +742,8 @@ def run_training(
                 results[run_name] = (run_id, rmse)
             else:
                 logger.warning(
-                    "Run '%s' reported as existing but search_runs returned empty. "
-                    "Falling back to training.",
-                    run_name,
+                    "run_reported_existing_but_not_found_retraining",
+                    run_name=run_name,
                 )
                 run_id, rmse = trainer_fn(
                     experiment_id,
@@ -809,9 +769,7 @@ def run_training(
             )
             results[run_name] = (run_id, rmse)
 
-    # Optuna tuning — skip only if same run_name + provenance + n_trials exists
     if _run_exists(experiment_id, RUN_NAME_CATBOOST_TUNED, run_scope=tuning_scope):
-        logger.info("Checking '%s' — run exists, retrieving metrics.", RUN_NAME_CATBOOST_TUNED)
         client = mlflow.MlflowClient()
         existing = client.search_runs(
             experiment_ids=[experiment_id],
@@ -829,9 +787,8 @@ def run_training(
             results[RUN_NAME_CATBOOST_TUNED] = (run_id, rmse)
         else:
             logger.warning(
-                "Run '%s' reported as existing but search_runs returned empty. "
-                "Falling back to tuning.",
-                RUN_NAME_CATBOOST_TUNED,
+                "tuning_run_reported_existing_but_not_found_retuning",
+                run_name=RUN_NAME_CATBOOST_TUNED,
             )
             run_id, rmse = _run_optuna_tuning(
                 experiment_id,
@@ -859,42 +816,34 @@ def run_training(
         )
         results[RUN_NAME_CATBOOST_TUNED] = (run_id, rmse)
 
-    # Defensive check: ensure we have at least one run before proceeding
     if not results:
         raise RuntimeError(
-            "No runs were collected. This could indicate a race condition where "
-            "all runs were reported as existing but none were found in search_runs, "
-            "or a failure in the training logic. Check MLflow server state and "
-            "experiment integrity."
+            "No runs were collected. Check MLflow server state and experiment integrity."
         )
 
-    # Find best run
     best_run_name = min(results, key=lambda k: results[k][1])
     best_run_id, best_rmse = results[best_run_name]
     logger.info(
-        "Best run: '%s' (run_id=%s, RMSE=%.4f).",
-        best_run_name,
-        best_run_id,
-        best_rmse,
+        "best_run_identified",
+        run_name=best_run_name,
+        run_id=best_run_id,
+        rmse=best_rmse,
     )
 
-    # Register — skip if the staged version already points to this run
     if _is_already_registered(best_run_id):
         logger.info(
-            "Skipping registration — '%s/%s' already points to run_id=%s.",
-            MLFLOW_MODEL_NAME,
-            MLFLOW_MODEL_STAGE,
-            best_run_id,
+            "registration_skipped_already_registered",
+            model_name=MLFLOW_MODEL_NAME,
+            stage=MLFLOW_MODEL_STAGE,
+            run_id=best_run_id,
         )
         _verify_model_loads(MLFLOW_MODEL_NAME, MLFLOW_MODEL_STAGE)
     else:
         _register_best_model(best_run_id)
-    logger.info("Training pipeline complete.")
+
+    logger.info("training_pipeline_complete")
+    clear_context()
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s — %(message)s",
-    )
     run_training()

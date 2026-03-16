@@ -7,13 +7,13 @@ The dataset contains **~6,300 diamonds** with attributes such as shape, weight, 
 
 ---
 
-# 📊 Project Overview
+## 📊 Project Overview
 
 This project investigates how different **diamond properties affect price** and builds a **machine learning model to predict diamond prices**.
 
 The workflow follows a standard **end-to-end ML pipeline**:
 
-```
+```text
 Fetch Data
 ↓
 Clean Data
@@ -31,9 +31,9 @@ ML Pipeline Construction
 
 ---
 
-# 📂 Project Structure
+## 📂 Project Structure
 
-```
+```text
 notebooks/
 │
 ├── 01_fetch_data.ipynb
@@ -54,13 +54,14 @@ README.md
 
 ---
 
-# ⚙️ Pipeline Stages
+## ⚙️ Pipeline Stages
 
-## 1️⃣ Data Fetching (`01_fetch_data`)
+### 1️⃣ Data Fetching (`01_fetch_data`)
 
 Downloads the **diamond dataset from Kaggle** and merges multiple files into a single dataset.
 
-### Steps
+#### Steps
+
 - Download dataset using `opendatasets`
 - Load CSV files for different diamond shapes:
   - cushion
@@ -75,47 +76,52 @@ Downloads the **diamond dataset from Kaggle** and merges multiple files into a s
 - Inspect structure and missing values
 - Save dataset as:
 
-```
+```text
 diamonds.csv
 ```
 
 Dataset size:
+
 - **6339 rows**
 - **11 columns**
 
 ---
 
-# 🧹 Data Cleaning (`02_clean_data`)
+## 🧹 Data Cleaning (`02_clean_data`)
 
 Prepares the dataset for analysis.
 
-### Steps
+### Cleaning Steps
 
-**Handle Missing Values**
+#### Handle Missing Values
+
 - Filled using **mode of each column**
 
-**Remove Duplicates**
+#### Remove Duplicates
+
 - Removed **348 duplicate rows**
 
-**Fix Data Types**
+#### Fix Data Types
+
 - Converted `Price` from string → float
 
-**Split Measurement Column**
+#### Split Measurement Column
 
 Original column:
-```
+
+```text
 Measurements
 ```
 
 Split into:
 
-```
+```text
 Length
 Width
 Depth
 ```
 
-**Memory Optimization**
+#### Memory Optimization
 
 Converted datatypes:
 
@@ -125,24 +131,25 @@ Converted datatypes:
 
 Memory reduced:
 
-```
+```text
 0.64 MB → 0.20 MB
 ```
 
 ### Output
 
-```
+```text
 clean_diamonds.csv
 clean_diamonds.br
 ```
 
 ---
 
-# 🔍 Exploratory Data Analysis (`03_eda`)
+## 🔍 Exploratory Data Analysis (`03_eda`)
 
 EDA was performed to understand relationships between features and diamond prices.
 
 ### Univariate Analysis
+
 Distribution of individual features:
 
 - Price
@@ -175,30 +182,30 @@ Detected abnormal values such as:
 
 Outliers were removed based on visual inspection.
 
-### Output
+### Cleaning Output
 
-```
+```text
 filtered_diamonds.csv
 filtered_diamonds.br
 ```
 
 ---
 
-# 🔄 Data Transformation (`05_data_transformation`)
+## 🔄 Data Transformation (`05_data_transformation`)
 
 Transforms data into a format suitable for machine learning.
 
-### Steps
+### Transformation Steps
 
-**Drop Irrelevant Columns**
+#### Drop Irrelevant Columns
 
 Remove columns that do not contribute to modeling.
 
-**Encode Categorical Variables**
+#### Encode Categorical Variables
 
 Two encoding techniques were used:
 
-**Ordinal Encoding**
+#### Ordinal Encoding
 
 Used for ordered features:
 
@@ -209,11 +216,11 @@ Used for ordered features:
 - symmetry
 - fluorescence
 
-**One-Hot Encoding**
+#### One-Hot Encoding
 
 Used for nominal features:
 
-```
+```text
 Shape_CUSHION
 Shape_ROUND
 Shape_OVAL
@@ -224,7 +231,7 @@ Shape_OVAL
 
 Final dataset contains:
 
-```
+```text
 19 features
 ```
 
@@ -232,16 +239,16 @@ Final dataset contains:
 
 A **correlation heatmap** was used to study relationships between numerical variables.
 
-### Output
+### Transformation Output
 
-```
+```text
 transform_diamonds.csv
 transform_diamonds.br
 ```
 
 ---
 
-# 📈 Hypothesis Testing (`04_hypothesis_testing`)
+## 📈 Hypothesis Testing (`04_hypothesis_testing`)
 
 Statistical tests were used to determine whether diamond characteristics significantly affect price.
 
@@ -253,33 +260,37 @@ Statistical tests were used to determine whether diamond characteristics signifi
 
 ### Key Findings
 
-**Polish**
-```
+#### Polish
+
+```text
 EX > VG > GD > FR
 ```
+
 Excellent polish diamonds are most expensive.
 
-**Symmetry**
+#### Symmetry
+
 Also significantly affects price.
 
-```
+```text
 EX > VG > GD > FR
 ```
 
-**Fluorescence**
+#### Fluorescence
+
 Shows statistically significant impact on price.
 
-**Categorical Relationships**
+#### Categorical Relationships
 
 Most categorical variables are correlated, except:
 
-```
+```text
 Cut ↔ Fluorescence
 ```
 
 ---
 
-# 🤖 Model Selection (`06_model_selection`)
+## 🤖 Model Selection (`06_model_selection`)
 
 Multiple machine learning models were evaluated to predict diamond prices.
 
@@ -312,34 +323,34 @@ Top predictors:
 
 ---
 
-# ⚡ ML Pipeline Construction (`07_pipeline`)
+## ⚡ ML Pipeline Construction (`07_pipeline`)
 
 The final notebook builds an **automated ML pipeline**.
 
 ### Pipeline Components
 
-**Imputer**
+#### Imputer
 
 Handles missing values:
 
 - Categorical → Most Frequent
 - Numerical → KNN Imputer
 
-**Encoder**
+#### Encoder
 
 - OneHotEncoder → Shape
 - Custom Ordinal Converter → Other categorical features
 
-**Feature Selector**
+#### Feature Selector
 
 Custom transformer using **CatBoostRegressor**  
 Selects **top 14 most important features**.
 
-**Regressor**
+#### Regressor
 
 Final prediction model:
 
-```
+```text
 CatBoostRegressor
 ```
 
@@ -347,7 +358,7 @@ CatBoostRegressor
 
 Used:
 
-```
+```text
 GridSearchCV
 ```
 
@@ -355,13 +366,13 @@ to find the best parameters.
 
 ---
 
-# 📊 Final Output
+## 📊 Final Output
 
 The final result is a **trained machine learning pipeline capable of predicting diamond prices based on physical and quality attributes.**
 
 Outputs include:
 
-```
+```text
 clean dataset
 transformed dataset
 trained ML pipeline
@@ -370,7 +381,7 @@ feature importance analysis
 
 ---
 
-# 🛠 Tech Stack
+## 🛠 Tech Stack
 
 - Python
 - Pandas
@@ -384,7 +395,7 @@ feature importance analysis
 
 ---
 
-# 🚀 Future Improvements
+## 🚀 Future Improvements
 
 - Deploy model as an API
 - Add real-time diamond pricing interface
@@ -393,7 +404,7 @@ feature importance analysis
 
 ---
 
-# 📌 Key Takeaways
+## 📌 Key Takeaways
 
 - **Weight is the most important factor affecting diamond price**
 - Quality characteristics like **colour, polish, and symmetry** significantly impact price
@@ -401,6 +412,6 @@ feature importance analysis
 
 ---
 
-# 📜 License
+## 📜 License
 
 MIT License

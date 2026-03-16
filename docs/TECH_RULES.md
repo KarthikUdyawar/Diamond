@@ -93,6 +93,7 @@ STREAMLIT_PORT=8501
 MLflow's backend store supports SQLite but it cannot handle concurrent writes — if training and the API both try to log simultaneously, SQLite corrupts. PostgreSQL handles this correctly. You already have PostgreSQL experience from chronos and ledgermind, so there is zero learning curve.
 
 **Rules:**
+
 - Connection strings must be assembled from env vars only, never hardcoded
 - All DB operations use context managers (`with engine.connect() as conn`)
 - The `postgres` service must have a health check before MLflow starts (use `depends_on` with `condition: service_healthy`)
@@ -124,6 +125,7 @@ Parquet preserves dtypes (especially ordinal categories), is 4–10x faster to r
 | Serialization       | `joblib` — pipeline saved as `pipeline.joblib`                      |
 
 **Rules:**
+
 - The entire feature pipeline must be a single `sklearn.Pipeline` object
 - The pipeline must be `fit` only on training data, never on the full dataset
 - The fitted pipeline is saved to MLflow as an artifact alongside the model
@@ -154,11 +156,13 @@ CLARITY_ORDER = ["I1", "SI2", "SI1", "VS2", "VS1", "VVS2", "VVS1", "IF"]
 - **GBM Baseline:** scikit-learn's own GBM is slower but well-understood. Acts as a sanity check — if XGBoost doesn't beat this by a meaningful margin, something is wrong.
 
 **Why not neural networks (MLP, TabNet)?**
+
 - SHAP TreeExplainer only works efficiently with tree-based models. Neural network explainability via KernelExplainer is 100–1000x slower and not feasible for a real-time `/explain` endpoint.
 - Diamond price prediction is a well-understood tabular task. Tree ensembles consistently match or outperform neural nets here.
 - Keep it simple for v1.0. Neural models are a v2 consideration.
 
 **Rules:**
+
 - All models must implement scikit-learn's `fit` / `predict` interface (or be wrapped in an `sklearn.Pipeline`)
 - No model is trained with the full dataset — always use `train_test_split(test_size=0.2, random_state=42)`
 - `random_state=42` everywhere, no exceptions (reproducibility)
@@ -208,6 +212,7 @@ GridSearch is exhaustive and wasteful. RandomSearch is better but dumb — it do
 KernelExplainer is model-agnostic but approximates SHAP values using sampling — it is 100–1000x slower than TreeExplainer and produces noisier values. Since every model in our stack is tree-based, TreeExplainer gives exact SHAP values in milliseconds. This is what makes real-time `/explain` feasible.
 
 **Rules:**
+
 - SHAP values are computed on a background dataset of 200 randomly sampled training rows (not the full training set — this controls memory and speed)
 - The `TreeExplainer` object is instantiated once at API startup and cached — never re-created per request
 - SHAP waterfall plots returned from the API are base64-encoded PNG, not file paths
@@ -266,7 +271,7 @@ Pydantic v2 is written in Rust and is 5–50x faster than v1 for validation. It 
 
 ### 5.2 API Structure
 
-```
+```text
 api/
 ├── main.py          # App factory, lifespan events (model loading)
 ├── schemas.py       # Pydantic v2 request + response models
@@ -284,6 +289,7 @@ api/
 ```
 
 **Rules:**
+
 - The model and SHAP explainer are loaded **once** at startup via FastAPI's `lifespan` context manager — not on each request
 - Route handlers contain zero business logic — they call service functions only
 - All service functions are pure (no side effects other than logging)
@@ -338,6 +344,7 @@ Plotly charts are interactive in Streamlit (hover, zoom, pan). Matplotlib charts
 `httpx` supports both sync and async calls and has a nearly identical API to `requests`. Streamlit's execution model is synchronous, so both work, but `httpx` is the modern standard and will not need to be swapped if async is added later.
 
 **Rules:**
+
 - All API calls from the UI go through a single `api_client.py` module — never call `httpx` directly from a page file
 - `st.session_state` is the only permitted state store — no global variables
 - Default input values are defined in a single `constants.py` file — never hardcoded in UI files
@@ -359,11 +366,12 @@ Plotly charts are interactive in Streamlit (hover, zoom, pan). Matplotlib charts
 
 **Service startup order:**
 
-```
+```text
 postgres  →  (healthy)  →  mlflow  →  (healthy)  →  api  →  ui
 ```
 
 **Rules:**
+
 - No service exposes ports to `0.0.0.0` except the ones meant for browser access (`5000`, `8000`, `8501`)
 - PostgreSQL data is persisted in a named Docker volume — `docker compose down` does not destroy data; `docker compose down -v` does
 - Each service has a `HEALTHCHECK` defined in its Dockerfile or Compose config
@@ -394,7 +402,7 @@ format:         ## Run ruff format
 
 **Pipeline steps:**
 
-```
+```text
 1. Checkout
 2. Set up Python 3.11
 3. Install dependencies (pip install -e ".[dev]")
@@ -406,11 +414,13 @@ format:         ## Run ruff format
 ```
 
 **What CI does NOT do in v1.0:**
+
 - Build Docker images (too slow for a personal project CI)
 - Run training (requires GPU/long runtime)
 - Deploy anywhere
 
 **Rules:**
+
 - CI must pass on every PR before merge — no exceptions
 - The `main` branch is protected — direct pushes are not allowed
 - Test failures block the PR — coverage below 80% blocks the PR
@@ -456,6 +466,7 @@ ignore_missing_imports = true
 | Test data    | Fixed seed inputs defined in `tests/fixtures.py` |
 
 **Rules:**
+
 - Unit tests for all service functions
 - Integration tests for all API endpoints (full request → response cycle)
 - No tests that require a running Docker container (mock the model and SHAP explainer)
@@ -476,6 +487,7 @@ logger = logging.getLogger(__name__)
 ```
 
 **Rules:**
+
 - `INFO` level for normal operations (prediction received, model loaded)
 - `WARNING` for recoverable issues (input near boundary, slow response)
 - `ERROR` for failures that require attention (model load failed, DB unreachable)
@@ -489,7 +501,8 @@ logger = logging.getLogger(__name__)
 Complete pinned dependency list by layer:
 
 ### Core ML
-```
+
+```text
 xgboost==2.0.3
 lightgbm==4.3.0
 catboost==1.2.5
@@ -505,7 +518,8 @@ pyarrow==16.0.0       # Parquet support
 ```
 
 ### API
-```
+
+```text
 fastapi==0.111.0
 uvicorn==0.29.0
 pydantic==2.7.1
@@ -515,19 +529,22 @@ python-dotenv==1.0.1
 ```
 
 ### Dashboard
-```
+
+```text
 streamlit==1.35.0
 plotly==5.22.0
 ```
 
 ### Database
-```
+
+```text
 sqlalchemy==2.0.30
 psycopg2-binary==2.9.9
 ```
 
 ### Dev / CI
-```
+
+```text
 pytest==8.2.0
 pytest-cov==5.0.0
 ruff==0.4.4

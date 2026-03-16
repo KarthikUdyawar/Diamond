@@ -12,8 +12,6 @@ Public API:
 
 from __future__ import annotations
 
-import logging
-import os
 import re
 from pathlib import Path
 
@@ -26,6 +24,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
+from src.config import get_settings
 from src.constants import (
     CARAT_PER_VOLUME_COL,
     CLARITY_ORDER,
@@ -47,7 +46,6 @@ from src.constants import (
     POLISH_ABBREV,
     POLISH_ORDER,
     PRICE_COL,
-    PROCESSED_DIR,
     RANDOM_STATE,
     RAW_COLUMNS,
     RAW_DATA_DIR,
@@ -59,8 +57,9 @@ from src.constants import (
     VOLUME_EPSILON,
     WIDTH_COL,
 )
+from src.logger import bind_context, clear_context, get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Column groups used by the ColumnTransformer
@@ -97,7 +96,7 @@ def validate_raw_data(df: pd.DataFrame) -> None:
         raise ValueError(
             f"Raw data is missing expected columns: {missing}. Found columns: {list(df.columns)}"
         )
-    logger.info("Raw data validation passed — all %d columns present.", len(RAW_COLUMNS))
+    logger.info("raw_data_validation_passed", n_columns=len(RAW_COLUMNS))
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +123,6 @@ def _parse_measurements(series: pd.Series) -> pd.DataFrame:
 
     def _split(val: object) -> tuple[float, float, float]:
         s = str(val).strip()
-        # Replace all separators with a single pipe for uniform splitting
         s = re.sub(r"[×xX]", "|", s)
         s = re.sub(r"-", "|", s)
         s = re.sub(r"\s+", "", s)
@@ -193,7 +191,7 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
     # Validate shapes against allowed categories
     invalid_shapes = set(df["Shape"].dropna()) - set(SHAPE_CATEGORIES)
     if invalid_shapes:
-        logger.error("Unknown shapes detected: %s", invalid_shapes)
+        logger.error("unknown_shapes_detected", shapes=sorted(invalid_shapes))
         raise ValueError(f"Unknown diamond shapes found: {invalid_shapes}")
 
     # 2. Parse Price
@@ -215,18 +213,18 @@ def clean_raw_data(df: pd.DataFrame) -> pd.DataFrame:
         & (df[DEPTH_MM_COL] >= OUTLIER_MIN_DEPTH_MM)
     )
     df = df[mask].copy()
-    logger.info("Outlier removal: %d → %d rows.", rows_before, len(df))
+    logger.info("outliers_removed", rows_before=rows_before, rows_after=len(df))
 
     # 5. Remove duplicates (exclude Id — it's a row identifier)
     cols_for_dedup = [c for c in df.columns if c != "Id"]
     before_dedup = len(df)
     df = df.drop_duplicates(subset=cols_for_dedup).copy()
-    logger.info("Deduplication: %d → %d rows.", before_dedup, len(df))
+    logger.info("duplicates_removed", rows_before=before_dedup, rows_after=len(df))
 
     # Drop Id — not a feature
     df = df.drop(columns=["Id"], errors="ignore")
 
-    logger.info("Cleaning complete. Final shape: %s.", df.shape)
+    logger.info("cleaning_complete", shape=df.shape)
     return df
 
 
@@ -331,6 +329,12 @@ def build_pipeline() -> Pipeline:
     )
 
     pipeline = Pipeline(steps=[("preprocessor", preprocessor)])
+    logger.debug(
+        "pipeline_built",
+        ordinal_cols=ORDINAL_COLS,
+        nominal_cols=NOMINAL_COLS,
+        numeric_cols=all_numeric,
+    )
     return pipeline
 
 
@@ -370,6 +374,8 @@ def _merge_raw_csvs(raw_dir: str = RAW_DATA_DIR) -> pd.DataFrame:
             "Run 'make download' to fetch the raw dataset."
         )
 
+    logger.info("raw_csvs_found", count=len(csv_files), raw_dir=raw_dir)
+
     frames: list[pd.DataFrame] = []
     for path in sorted(csv_files):
         df = pd.read_csv(path)
@@ -377,23 +383,24 @@ def _merge_raw_csvs(raw_dir: str = RAW_DATA_DIR) -> pd.DataFrame:
         df = df.drop(columns=["Data Url"], errors="ignore")
         missing = [col for col in RAW_COLUMNS if col not in df.columns]
         if missing:
-            logger.error(f"{path} is missing expected columns: {missing}")
+            logger.error("csv_missing_columns", file=str(path), missing=missing)
             raise ValueError(f"{path} is missing expected columns: {missing}")
         frames.append(df[RAW_COLUMNS].copy())
+        logger.debug("csv_loaded", file=path.name, rows=len(df))
 
     merged = pd.concat(frames, ignore_index=True)
     logger.info(
-        "Merged %d CSV files → %d rows, %d columns.",
-        len(csv_files),
-        len(merged),
-        len(merged.columns),
+        "raw_csvs_merged",
+        n_files=len(csv_files),
+        total_rows=len(merged),
+        n_columns=len(merged.columns),
     )
     return merged
 
 
 def run_feature_engineering(
-    raw_dir: str = RAW_DATA_DIR,
-    processed_dir: str = PROCESSED_DIR,
+    raw_dir: str | None = None,
+    processed_dir: str | None = None,
     pipeline_path: str | None = None,
 ) -> None:
     """
@@ -410,18 +417,28 @@ def run_feature_engineering(
     ----------
     raw_dir:
         Directory containing the Kaggle download subfolders.
+        Defaults to config.raw_data_dir.
     processed_dir:
         Directory for output artefacts.
+        Defaults to config.processed_dir.
     pipeline_path:
         Full path for the saved pipeline joblib file.
+        Defaults to config.pipeline_path.
     """
-    Path(processed_dir).mkdir(parents=True, exist_ok=True)
-    if pipeline_path is None:
-        pipeline_path = os.fspath(Path(processed_dir) / Path(PIPELINE_PATH).name)
-    Path(pipeline_path).parent.mkdir(parents=True, exist_ok=True)
+    cfg = get_settings()
+    bind_context(app_env=cfg.app_env, stage="feature_engineering")
+    logger.info("feature_engineering_started", env=cfg.app_env)
+
+    # Resolve paths — caller overrides take precedence over config
+    _raw_dir = raw_dir or str(cfg.raw_data_dir)
+    _processed_dir = processed_dir or str(cfg.processed_dir)
+    _pipeline_path = pipeline_path or str(cfg.pipeline_path)
+
+    Path(_processed_dir).mkdir(parents=True, exist_ok=True)
+    Path(_pipeline_path).parent.mkdir(parents=True, exist_ok=True)
 
     # 1. Merge raw CSVs
-    df_raw = _merge_raw_csvs(raw_dir)
+    df_raw = _merge_raw_csvs(_raw_dir)
 
     # 2. Validate + clean
     validate_raw_data(df_raw)
@@ -432,19 +449,19 @@ def run_feature_engineering(
     X, y = _extract_target(df_feat)
 
     if len(X) < MIN_SPLIT_SAMPLES:
-        logger.error("Dataset too small for train/test split: %s", len(X))
+        logger.error("dataset_too_small_for_split", n_rows=len(X))
         raise ValueError("Dataset too small for train/test split")
 
     # 4. Split — stratification not needed for regression
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE
     )
-    logger.info("Split: %d train rows, %d test rows.", len(X_train), len(X_test))
+    logger.info("split_done", train_rows=len(X_train), test_rows=len(X_test))
 
     # 5. Fit pipeline on train only (no leakage)
     pipeline = build_pipeline()
     pipeline.fit(X_train)
-    logger.info("Pipeline fitted on training data.")
+    logger.info("pipeline_fitted")
 
     # 6. Save parquet files (include target)
     train_df = X_train.copy()
@@ -452,20 +469,19 @@ def run_feature_engineering(
     test_df = X_test.copy()
     test_df[LOG_PRICE_COL] = y_test
 
-    train_out = os.path.join(processed_dir, "train.parquet")
-    test_out = os.path.join(processed_dir, "test.parquet")
+    train_out = str(Path(_processed_dir) / "train.parquet")
+    test_out = str(Path(_processed_dir) / "test.parquet")
     train_df.to_parquet(train_out, index=False)
     test_df.to_parquet(test_out, index=False)
-    logger.info("Saved train → %s", train_out)
-    logger.info("Saved test  → %s", test_out)
+    logger.info("parquet_saved", train=train_out, test=test_out)
 
     # 7. Save pipeline
-    joblib.dump(pipeline, pipeline_path)
-    logger.info("Saved pipeline → %s", pipeline_path)
+    joblib.dump(pipeline, _pipeline_path)
+    logger.info("pipeline_saved", path=_pipeline_path)
 
-    logger.info("Feature engineering complete.")
+    logger.info("feature_engineering_complete")
+    clear_context()
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     run_feature_engineering()

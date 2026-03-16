@@ -84,7 +84,7 @@ The `mlflow-artifacts:/` scheme is special: the client automatically routes arti
 
 ## Selected Features (top 14 of 22)
 
-```
+```text
 Colour, Clarity, Polish, Symmetry, Fluorescence,
 Shape_Pear, Shape_Round,
 Weight, length, width, depth_mm,

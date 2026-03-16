@@ -68,7 +68,7 @@ Transform Diamond from a notebook prototype into a complete, end-to-end ML produ
 
 ## 4. Architecture
 
-```
+```text
 Raw Data (CSV)
       │
       ▼
@@ -107,7 +107,7 @@ All services orchestrated via Docker Compose
 
 ## 5. Folder Structure
 
-```
+```text
 Diamond/
 ├── data/
 │   ├── raw/                    # Original CSV dataset
@@ -189,14 +189,17 @@ The entire pipeline must be a single `sklearn.pipeline.Pipeline` object, seriali
 Three output types required:
 
 **Global (per model run):**
+
 - SHAP summary beeswarm plot — which features drive price across all diamonds
 - Saved as `shap_summary.png`, logged to MLflow as artifact
 
 **Local (per prediction):**
+
 - SHAP waterfall plot — why this specific diamond got this price
 - Returned as base64-encoded PNG from the `/explain` API endpoint
 
 **Dependence (per model run):**
+
 - SHAP dependence plot for `carat` vs `price`
 - Saved as `shap_dependence_carat.png`, logged to MLflow as artifact
 
@@ -209,6 +212,7 @@ Three output types required:
 #### `POST /predict`
 
 **Request:**
+
 ```json
 {
   "carat": 0.89,
@@ -224,6 +228,7 @@ Three output types required:
 ```
 
 **Response:**
+
 ```json
 {
   "predicted_price_usd": 3842.50,
@@ -241,6 +246,7 @@ Three output types required:
 Same request body as `/predict`.
 
 **Response:**
+
 ```json
 {
   "shap_values": {
@@ -261,6 +267,7 @@ Same request body as `/predict`.
 #### `GET /health`
 
 **Response:**
+
 ```json
 {
   "status": "ok",
@@ -286,19 +293,22 @@ Same request body as `/predict`.
 
 ### 6.5 Streamlit Dashboard (`ui/app.py`)
 
-**Tab 1 — Price Predictor**
+#### Tab 1 — Price Predictor
+
 - Input controls: sliders for `carat`, `depth`, `table`, `x`, `y`, `z`; dropdowns for `cut`, `color`, `clarity`
 - Live prediction on input change (calls `/predict`)
 - Display: predicted price in large font, confidence range as a visual bar
 - Plain-English summary: *"This diamond is estimated at $3,842 based on its 0.89ct weight and Premium cut."*
 
-**Tab 2 — Explain This Prediction**
+#### Tab 2 — Explain This Prediction
+
 - Same input controls as Tab 1
 - On "Explain" button click: calls `/explain`, renders SHAP waterfall chart
 - Feature contribution table: sorted by absolute SHAP value
 - Plain-English sentence per top 3 features: *"The high carat weight added $1,243 to the price."*
 
-**Tab 3 — Model Dashboard**
+#### Tab 3 — Model Dashboard
+
 - Pulls run data from MLflow tracking API
 - Comparison table: all model runs with RMSE, MAE, R², training time
 - Global SHAP summary plot from the best registered run
@@ -404,5 +414,3 @@ All of the following must be true before tagging `v1.0`:
 | Q4  | Should `mlruns/` be committed to the repo or fully gitignored?                   | Karthik | Day 1 |
 
 ---
-
-*PRD generated for Diamond v1.0 — March 2026*
